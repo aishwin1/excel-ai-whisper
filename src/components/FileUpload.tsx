@@ -1,16 +1,38 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Upload, X } from "lucide-react";
+import { Upload, X, Plus, Loader2 } from "lucide-react";
 
 interface FileUploadProps {
   onUpload: (file: File) => void;
   onCancel: () => void;
+  onCreateNew?: () => void;
+  isProcessing?: boolean;
 }
 
-export const FileUpload = ({ onUpload, onCancel }: FileUploadProps) => {
+export const FileUpload = ({ onUpload, onCancel, onCreateNew, isProcessing = false }: FileUploadProps) => {
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const validateExcelFile = (file: File): boolean => {
+    const allowedTypes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
+    
+    if (!allowedTypes.includes(file.type) && 
+        !file.name.endsWith('.xlsx') && 
+        !file.name.endsWith('.xls')) {
+      setError("Please upload only Excel files (.xlsx or .xls)");
+      return false;
+    }
+    
+    if (file.size > 10 * 1024 * 1024) { // 10MB limit
+      setError("File size exceeds 10MB limit");
+      return false;
+    }
+    
+    setError(null);
+    return true;
+  };
 
   const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
@@ -39,7 +61,7 @@ export const FileUpload = ({ onUpload, onCancel }: FileUploadProps) => {
     
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const droppedFile = e.dataTransfer.files[0];
-      if (droppedFile.name.endsWith('.xlsx') || droppedFile.name.endsWith('.xls')) {
+      if (validateExcelFile(droppedFile)) {
         setFile(droppedFile);
       }
     }
@@ -47,7 +69,10 @@ export const FileUpload = ({ onUpload, onCancel }: FileUploadProps) => {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      setFile(e.target.files[0]);
+      const selectedFile = e.target.files[0];
+      if (validateExcelFile(selectedFile)) {
+        setFile(selectedFile);
+      }
     }
   };
 
@@ -67,60 +92,89 @@ export const FileUpload = ({ onUpload, onCancel }: FileUploadProps) => {
           </Button>
         </div>
 
-        <div
-          className={`border-2 border-dashed rounded-lg p-8 text-center ${
-            isDragging
-              ? "border-apple-blue bg-apple-blue/5"
-              : "border-apple-gray-300"
-          } transition-colors`}
-          onDragEnter={handleDragEnter}
-          onDragLeave={handleDragLeave}
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-        >
-          <div className="mx-auto bg-apple-gray-100 w-12 h-12 mb-4 rounded-full flex items-center justify-center">
-            <Upload size={20} className="text-apple-blue" />
+        {isProcessing ? (
+          <div className="py-10 flex flex-col items-center justify-center">
+            <Loader2 size={40} className="text-apple-blue animate-spin mb-4" />
+            <p className="text-apple-gray-600 text-center">Processing your Excel file...</p>
           </div>
-          <p className="text-apple-gray-600 mb-2">
-            <span className="font-medium">Click to upload</span> or drag and drop
-          </p>
-          <p className="text-apple-gray-500 text-sm mb-4">
-            Excel files only (XLSX, XLS)
-          </p>
-          <input
-            type="file"
-            className="hidden"
-            id="file-upload"
-            accept=".xlsx,.xls"
-            onChange={handleFileChange}
-          />
-          <label htmlFor="file-upload">
-            <Button
-              variant="outline"
-              className="cursor-pointer"
-              onClick={(e) => e.stopPropagation()}
-              asChild
+        ) : (
+          <>
+            <div
+              className={`border-2 border-dashed rounded-lg p-8 text-center ${
+                isDragging
+                  ? "border-apple-blue bg-apple-blue/5"
+                  : error 
+                    ? "border-red-400 bg-red-50" 
+                    : "border-apple-gray-300"
+              } transition-colors`}
+              onDragEnter={handleDragEnter}
+              onDragLeave={handleDragLeave}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
             >
-              <span>Select File</span>
-            </Button>
-          </label>
-        </div>
-
-        {file && (
-          <div className="mt-4 bg-apple-gray-50 rounded-lg p-3 flex justify-between items-center">
-            <div className="overflow-hidden">
-              <p className="font-medium truncate">{file.name}</p>
-              <p className="text-sm text-apple-gray-500">
-                {(file.size / 1024 / 1024).toFixed(2)} MB
+              <div className="mx-auto bg-apple-gray-100 w-12 h-12 mb-4 rounded-full flex items-center justify-center">
+                <Upload size={20} className="text-apple-blue" />
+              </div>
+              <p className="text-apple-gray-600 mb-2">
+                <span className="font-medium">Click to upload</span> or drag and drop
               </p>
+              <p className="text-apple-gray-500 text-sm mb-4">
+                Excel files only (XLSX, XLS)
+              </p>
+              <input
+                type="file"
+                className="hidden"
+                id="file-upload"
+                accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                onChange={handleFileChange}
+              />
+              <label htmlFor="file-upload">
+                <Button
+                  variant="outline"
+                  className="cursor-pointer"
+                  onClick={(e) => e.stopPropagation()}
+                  asChild
+                >
+                  <span>Select File</span>
+                </Button>
+              </label>
             </div>
-            <Button 
-              className="bg-apple-blue hover:bg-apple-blue/90" 
-              onClick={handleUpload}
-            >
-              Upload
-            </Button>
-          </div>
+
+            {error && (
+              <div className="mt-2 text-red-500 text-sm">{error}</div>
+            )}
+
+            {file && !error && (
+              <div className="mt-4 bg-apple-gray-50 rounded-lg p-3 flex justify-between items-center">
+                <div className="overflow-hidden">
+                  <p className="font-medium truncate">{file.name}</p>
+                  <p className="text-sm text-apple-gray-500">
+                    {(file.size / 1024 / 1024).toFixed(2)} MB
+                  </p>
+                </div>
+                <Button 
+                  className="bg-apple-blue hover:bg-apple-blue/90" 
+                  onClick={handleUpload}
+                >
+                  Upload
+                </Button>
+              </div>
+            )}
+
+            {onCreateNew && (
+              <div className="mt-4 pt-4 border-t border-apple-gray-200">
+                <p className="text-center text-apple-gray-600 mb-3">Or start from scratch</p>
+                <Button 
+                  onClick={onCreateNew}
+                  variant="outline"
+                  className="w-full flex items-center justify-center gap-2"
+                >
+                  <Plus size={16} />
+                  <span>Create New Spreadsheet</span>
+                </Button>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
