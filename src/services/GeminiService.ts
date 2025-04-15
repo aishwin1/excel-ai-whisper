@@ -13,6 +13,7 @@ export interface GeminiResponse {
 export class GeminiService {
   private static API_KEY = "AIzaSyDvHZ5PRJkxXyTHfjkBUMgrpOa_iFd1HGY";
   private static API_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent";
+  private static FIRECRAWL_API_KEY = "fc-eb885ba004f340d7b5f7e9ee96a6d8d1";
 
   static async processQuery(prompt: string): Promise<GeminiResponse> {
     try {
@@ -47,7 +48,7 @@ export class GeminiService {
         const errorText = await response.text();
         console.error("Gemini API response not OK:", response.status, errorText);
         return { 
-          text: "Sorry, I encountered an error while processing your request. Please try again.", 
+          text: `Sorry, I encountered an error while processing your request (Status: ${response.status}). Please try again.`, 
           isError: true 
         };
       }
@@ -57,7 +58,7 @@ export class GeminiService {
       if (data.error) {
         console.error("Gemini API error:", data.error);
         return { 
-          text: "Sorry, I encountered an error while processing your request. Please try again.", 
+          text: `Sorry, I encountered an error: ${data.error?.message || "Unknown error"}. Please try again.`, 
           isError: true 
         };
       }
