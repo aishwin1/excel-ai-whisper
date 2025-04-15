@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FileSpreadsheet, Plus, Table, BarChart3, ArrowDownUp } from "lucide-react";
 import { FooterStatus } from "./FooterStatus";
 import { ExcelData } from "@/services/ExcelService";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface ExcelPreviewProps {
   excelData: ExcelData | null;
@@ -43,34 +44,36 @@ export const ExcelPreview = ({ excelData, setShowFileUpload }: ExcelPreviewProps
         {hasFile ? (
           Object.entries(excelData?.sheets || {}).map(([sheetName, sheet]) => (
             <TabsContent key={sheetName} value={sheetName} className="flex-1 p-0 m-0 flex flex-col">
-              <div className="flex-1 w-full overflow-auto">
-                <table className="min-w-full border-collapse">
-                  <thead>
-                    <tr className="bg-apple-gray-100">
-                      <th className="border border-apple-gray-200 p-2 text-center w-10"></th>
-                      {Array(10).fill(0).map((_, i) => (
-                        <th key={i} className="border border-apple-gray-200 p-2 text-center font-medium text-apple-gray-700 w-24">
-                          {String.fromCharCode(65 + i)}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Array(Math.max(sheet?.data?.length || 0, 20)).fill(0).map((_, rowIndex) => (
-                      <tr key={rowIndex} className={rowIndex % 2 === 0 ? "bg-white" : "bg-apple-gray-50/50"}>
-                        <td className="border border-apple-gray-200 p-2 text-center font-medium text-apple-gray-700 bg-apple-gray-100/70 w-10">
-                          {rowIndex + 1}
-                        </td>
-                        {Array(10).fill(0).map((_, colIndex) => (
-                          <td key={colIndex} className="border border-apple-gray-200 p-2 text-left">
-                            {sheet?.data?.[rowIndex]?.[colIndex] || ""}
-                          </td>
+              <ScrollArea className="flex-1 w-full h-full">
+                <div className="min-w-max">
+                  <table className="min-w-full border-collapse">
+                    <thead className="sticky top-0 z-10">
+                      <tr className="bg-apple-gray-100">
+                        <th className="border border-apple-gray-200 p-2 text-center w-10"></th>
+                        {Array(10).fill(0).map((_, i) => (
+                          <th key={i} className="border border-apple-gray-200 p-2 text-center font-medium text-apple-gray-700 w-24">
+                            {String.fromCharCode(65 + i)}
+                          </th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {Array(Math.max(sheet?.data?.length || 0, 20)).fill(0).map((_, rowIndex) => (
+                        <tr key={rowIndex} className={rowIndex % 2 === 0 ? "bg-white" : "bg-apple-gray-50/50"}>
+                          <td className="border border-apple-gray-200 p-2 text-center font-medium text-apple-gray-700 bg-apple-gray-100/70 w-10 sticky left-0">
+                            {rowIndex + 1}
+                          </td>
+                          {Array(10).fill(0).map((_, colIndex) => (
+                            <td key={colIndex} className="border border-apple-gray-200 p-2 text-left">
+                              {sheet?.data?.[rowIndex]?.[colIndex] || ""}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </ScrollArea>
               <FooterStatus />
             </TabsContent>
           ))

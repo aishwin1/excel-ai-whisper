@@ -8,10 +8,12 @@ export interface GeminiResponse {
 
 export class GeminiService {
   private static API_KEY = "AIzaSyDvHZ5PRJkxXyTHfjkBUMgrpOa_iFd1HGY";
-  private static API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent";
+  private static API_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent";
 
   static async processQuery(prompt: string): Promise<GeminiResponse> {
     try {
+      console.log("Calling Gemini API with prompt:", prompt.substring(0, 100) + "...");
+      
       const response = await fetch(`${this.API_URL}?key=${this.API_KEY}`, {
         method: 'POST',
         headers: {
@@ -37,6 +39,15 @@ export class GeminiService {
         })
       });
 
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Gemini API response not OK:", response.status, errorText);
+        return { 
+          text: "Sorry, I encountered an error while processing your request. Please try again.", 
+          isError: true 
+        };
+      }
+
       const data = await response.json();
       
       if (data.error) {
@@ -47,6 +58,7 @@ export class GeminiService {
         };
       }
 
+      console.log("Gemini API response received");
       return { 
         text: data.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated", 
         isError: false 

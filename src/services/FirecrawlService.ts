@@ -32,6 +32,15 @@ export class FirecrawlService {
         })
       });
 
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Firecrawl API error status:", response.status, errorText);
+        return { 
+          success: false, 
+          error: `Failed to fetch web data: ${response.statusText}` 
+        };
+      }
+
       const data = await response.json();
       
       if (!response.ok) {
@@ -42,6 +51,7 @@ export class FirecrawlService {
         };
       }
 
+      console.log("Firecrawl API success, results:", data.results?.length || 0);
       return { 
         success: true, 
         data: data.results || [] 
