@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react";
 import { Header } from "@/components/Header";
 import { ChatPanel } from "@/components/ChatPanel";
@@ -8,7 +7,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { useToast } from "@/components/ui/use-toast";
 import { AiPoweredBadge } from "@/components/AiPoweredBadge";
 import { ExcelData, ExcelService } from "@/services/ExcelService";
-import { GeminiService } from "@/services/GeminiService";
+import { GeminiService, GeminiResponse } from "@/services/GeminiService";
 import { FirecrawlService } from "@/services/FirecrawlService";
 
 const Index = () => {
@@ -98,6 +97,96 @@ const Index = () => {
       duration: 3000,
     });
   };
+  
+  const handleProcessGeminiResponse = async (query: string): Promise<GeminiResponse> => {
+    if (excelData && query.toLowerCase().includes("excel") || 
+        /create|insert|add|calculate|sort|filter|chart|graph/.test(query.toLowerCase())) {
+      const response = await GeminiService.processExcelOperation(query, excelData);
+      
+      if (response.excelOperation) {
+        applyExcelOperation(response.excelOperation);
+      }
+      
+      return response;
+    }
+    
+    return await GeminiService.processQuery(query);
+  };
+  
+  const applyExcelOperation = (operation: any) => {
+    if (!excelData) return;
+    
+    const updatedData = { ...excelData };
+    const activeSheet = updatedData.activeSheet;
+    const sheetData = [...updatedData.sheets[activeSheet].data];
+    
+    try {
+      switch (operation.type) {
+        case "update_cell":
+          if (operation.data && typeof operation.data.row === 'number' && typeof operation.data.col === 'number') {
+            while (sheetData.length <= operation.data.row) {
+              sheetData.push(Array(10).fill(''));
+            }
+            
+            if (!sheetData[operation.data.row]) {
+              sheetData[operation.data.row] = Array(10).fill('');
+            }
+            
+            while (sheetData[operation.data.row].length <= operation.data.col) {
+              sheetData[operation.data.row].push('');
+            }
+            
+            sheetData[operation.data.row][operation.data.col] = operation.data.value;
+          }
+          break;
+          
+        case "add_formula":
+          if (operation.data && operation.data.formula) {
+            if (sheetData.length < 2) {
+              sheetData.push(Array(10).fill(''));
+              sheetData.push(Array(10).fill(''));
+            }
+            
+            sheetData[1][1] = operation.data.formula;
+            
+            toast({
+              title: "Formula Added",
+              description: `Added formula ${operation.data.formula}`,
+              duration: 3000
+            });
+          }
+          break;
+          
+        case "create_chart":
+          toast({
+            title: "Chart Creation",
+            description: "Chart creation functionality is coming soon!",
+            duration: 3000
+          });
+          break;
+          
+        default:
+          console.log("Unknown operation type:", operation.type);
+      }
+      
+      updatedData.sheets[activeSheet].data = sheetData;
+      setExcelData(updatedData);
+      
+      toast({
+        title: "Excel Updated",
+        description: `Applied ${operation.type} operation`,
+        duration: 3000
+      });
+    } catch (error) {
+      console.error("Error applying Excel operation:", error);
+      toast({
+        title: "Operation Error",
+        description: "Could not apply the requested Excel operation",
+        variant: "destructive",
+        duration: 3000
+      });
+    }
+  };
 
   return (
     <div className="h-screen flex flex-col bg-gradient-to-br from-white to-apple-gray-100">
@@ -117,7 +206,6 @@ const Index = () => {
             )}`;
           }}
         >
-          {/* Chat Panel (Left Side) */}
           <ResizablePanel 
             defaultSize={35} 
             minSize={25}
@@ -125,7 +213,7 @@ const Index = () => {
             className="bg-white border-r border-apple-gray-200 shadow-sm"
           >
             <ChatPanel 
-              onProcessQuery={(query) => GeminiService.processQuery(query)}
+              onProcessQuery={(query) => handleProcessGeminiResponse(query)}
               excelData={excelData}
               onUpdateExcelData={setExcelData}
               onFetchWebData={(query) => FirecrawlService.fetchWebData(query)}
@@ -134,7 +222,6 @@ const Index = () => {
           
           <ResizableHandle className="w-1.5 bg-apple-gray-100 hover:bg-apple-blue transition-colors" />
           
-          {/* Excel Preview (Right Side) */}
           <ResizablePanel defaultSize={65} minSize={40}>
             <ExcelPreview 
               excelData={excelData}
@@ -144,7 +231,6 @@ const Index = () => {
         </ResizablePanelGroup>
       </div>
       
-      {/* File Upload Modal (conditionally rendered) */}
       {showFileUpload && (
         <FileUpload 
           onUpload={handleFileUpload} 
