@@ -72,7 +72,19 @@ export class ExcelService {
     const workbook = XLSX.utils.book_new();
     
     Object.entries(data.sheets).forEach(([sheetName, sheetData]) => {
-      const worksheet = XLSX.utils.aoa_to_sheet(sheetData.data);
+      // Convert any complex cell objects to their string representation
+      const processedData = sheetData.data.map(row => 
+        row.map(cell => {
+          if (typeof cell === 'object' && cell !== null) {
+            // Return the value property or string representation
+            return cell.value !== undefined ? cell.value : 
+                  (cell.toString ? cell.toString() : JSON.stringify(cell));
+          }
+          return cell;
+        })
+      );
+      
+      const worksheet = XLSX.utils.aoa_to_sheet(processedData);
       XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
     });
     
@@ -87,6 +99,8 @@ export class ExcelService {
     const sheetData = updatedData.sheets[activeSheet].data;
     
     try {
+      console.log("Applying Excel operation:", operation.type, operation.data);
+      
       switch (operation.type) {
         case "update_cell":
           if (operation.data && typeof operation.data.row === 'number' && typeof operation.data.col === 'number') {
@@ -107,18 +121,39 @@ export class ExcelService {
             // Update the cell with the value
             const value = operation.data.value;
             sheetData[operation.data.row][operation.data.col] = value;
+            
+            // Mark the cell as AI-generated
+            if (typeof value === 'string' || typeof value === 'number') {
+              sheetData[operation.data.row][operation.data.col] = {
+                value: value,
+                isAIGenerated: true,
+                toString: function() { return String(this.value); }
+              };
+            }
 
             // Set this cell as active
             updatedData.sheets[activeSheet].activeCell = {
               row: operation.data.row,
               col: operation.data.col
             };
+            
+            console.log("Cell updated successfully:", operation.data.row, operation.data.col, value);
+          } else {
+            console.error("Invalid update_cell operation data:", operation.data);
           }
           break;
           
         case "add_formula":
           if (operation.data) {
-            const { row = 1, col = 1, formula } = operation.data;
+            const { row, col, formula } = operation.data;
+            
+            // Validate row and column
+            if (typeof row !== 'number' || typeof col !== 'number' || !formula) {
+              console.error("Invalid add_formula operation data:", operation.data);
+              break;
+            }
+            
+            console.log("Adding formula:", row, col, formula);
             
             // Ensure rows and columns exist
             while (sheetData.length <= row) {
@@ -133,9 +168,6 @@ export class ExcelService {
               sheetData[row].push('');
             }
             
-            // Add the formula
-            sheetData[row][col] = formula;
-            
             // Process the formula result if possible
             if (formula.startsWith('=')) {
               try {
@@ -145,13 +177,37 @@ export class ExcelService {
                   sheetData[row][col] = {
                     value: formulaResult,
                     formula: formula,
-                    toString: () => formulaResult.toString()
+                    isAIGenerated: true,
+                    toString: function() { return String(this.value); }
                   };
+                  console.log("Formula calculated successfully:", formulaResult);
+                } else {
+                  // Store the formula directly if calculation failed
+                  sheetData[row][col] = {
+                    value: formula,
+                    formula: formula,
+                    isAIGenerated: true,
+                    toString: function() { return this.formula; }
+                  };
+                  console.log("Formula stored without calculation");
                 }
               } catch (error) {
                 console.error("Formula calculation error:", error);
                 // Keep the formula as is if calculation fails
+                sheetData[row][col] = {
+                  value: formula,
+                  formula: formula,
+                  isAIGenerated: true,
+                  toString: function() { return this.formula; }
+                };
               }
+            } else {
+              // Not a formula, just add the text
+              sheetData[row][col] = {
+                value: formula,
+                isAIGenerated: true,
+                toString: function() { return String(this.value); }
+              };
             }
 
             // Set this cell as active
@@ -172,8 +228,20 @@ export class ExcelService {
             const chartCols = 3;
             
             // Create chart placeholder
-            sheetData[startRow][startCol] = `[Chart: ${operation.data.chartType}]`;
-            sheetData[startRow][startCol + 1] = `${operation.data.title || 'Chart Title'}`;
+            sheetData[startRow][startCol] = {
+              value: `[Chart: ${operation.data.chartType}]`,
+              isAIGenerated: true,
+              isChart: true,
+              chartType: operation.data.chartType,
+              toString: function() { return this.value; }
+            };
+            
+            sheetData[startRow][startCol + 1] = {
+              value: `${operation.data.title || 'Chart Title'}`,
+              isAIGenerated: true,
+              isChart: true,
+              toString: function() { return this.value; }
+            };
             
             // Mark the chart area with background color
             for (let r = startRow; r < startRow + chartRows && r < sheetData.length; r++) {
@@ -186,16 +254,19 @@ export class ExcelService {
                   sheetData[r][c] = {
                     value: sheetData[r][c],
                     isChartData: true,
-                    toString: () => sheetData[r][c].value.toString()
+                    isAIGenerated: true,
+                    toString: function() { return String(this.value); }
                   };
                 }
               }
             }
+            
+            console.log("Chart placeholder created:", operation.data.chartType);
           }
           break;
           
         case "sort":
-          if (operation.data && operation.data.column) {
+          if (operation.data && operation.data.column !== undefined) {
             const colIndex = typeof operation.data.column === 'string' 
               ? operation.data.column.charCodeAt(0) - 65  // Convert A->0, B->1, etc.
               : Number(operation.data.column);
@@ -205,24 +276,32 @@ export class ExcelService {
               const dataRows = sheetData.slice(1);
               
               dataRows.sort((a, b) => {
-                const aVal = a[colIndex];
-                const bVal = b[colIndex];
+                // Get cell values, handling complex cell objects
+                const aVal = typeof a[colIndex] === 'object' && a[colIndex] !== null ? 
+                             a[colIndex].value : a[colIndex];
+                const bVal = typeof b[colIndex] === 'object' && b[colIndex] !== null ? 
+                             b[colIndex].value : b[colIndex];
                 
                 if (typeof aVal === 'number' && typeof bVal === 'number') {
                   return aVal - bVal;
                 }
                 
-                return String(aVal).localeCompare(String(bVal));
+                return String(aVal || '').localeCompare(String(bVal || ''));
               });
               
               updatedData.sheets[activeSheet].data = [headerRow, ...dataRows];
+              console.log("Data sorted by column:", colIndex);
+            } else {
+              console.error("Invalid sort column index:", colIndex);
             }
+          } else {
+            console.error("Invalid sort operation data:", operation.data);
           }
           break;
           
         case "filter":
           // Simple filter implementation
-          if (operation.data && operation.data.column && operation.data.value) {
+          if (operation.data && operation.data.column !== undefined && operation.data.value !== undefined) {
             const colIndex = typeof operation.data.column === 'string'
               ? operation.data.column.charCodeAt(0) - 65  // Convert A->0, B->1, etc.
               : Number(operation.data.column);
@@ -233,18 +312,25 @@ export class ExcelService {
               
               // Filter rows where the column matches the value
               const filteredRows = dataRows.filter(row => {
-                const cellValue = row[colIndex];
+                // Get cell value, handling complex cell objects
+                const cellValue = typeof row[colIndex] === 'object' && row[colIndex] !== null ? 
+                                 row[colIndex].value : row[colIndex];
                 const targetValue = operation.data.value;
                 
-                if (typeof targetValue === 'string' && typeof cellValue === 'string') {
-                  return cellValue.toLowerCase().includes(targetValue.toLowerCase());
+                if (typeof targetValue === 'string' && (typeof cellValue === 'string' || cellValue === undefined)) {
+                  return String(cellValue || '').toLowerCase().includes(String(targetValue).toLowerCase());
                 }
                 
                 return cellValue === targetValue;
               });
               
               updatedData.sheets[activeSheet].data = [headerRow, ...filteredRows];
+              console.log("Data filtered by column:", colIndex, "value:", operation.data.value);
+            } else {
+              console.error("Invalid filter column index:", colIndex);
             }
+          } else {
+            console.error("Invalid filter operation data:", operation.data);
           }
           break;
       }
@@ -288,7 +374,14 @@ export class ExcelService {
         if (rowIndex >= 0 && rowIndex < data.length && 
             colIndex >= 0 && colIndex < data[rowIndex].length) {
           const cellValue = data[rowIndex][colIndex];
-          return typeof cellValue === 'number' ? cellValue.toString() : '0';
+          
+          // Handle complex cell objects
+          const value = typeof cellValue === 'object' && cellValue !== null ?
+                       (cellValue.value !== undefined ? cellValue.value : 0) :
+                       cellValue;
+          
+          return typeof value === 'number' ? value.toString() : 
+                (typeof value === 'string' && !isNaN(Number(value)) ? value : '0');
         }
         return '0';
       });
@@ -308,7 +401,12 @@ export class ExcelService {
     cells.forEach(cell => {
       const { row, col } = this.cellToIndices(cell);
       if (row >= 0 && row < data.length && col >= 0 && col < data[row].length) {
-        const value = data[row][col];
+        // Handle complex cell objects
+        let value = data[row][col];
+        if (typeof value === 'object' && value !== null) {
+          value = value.value !== undefined ? value.value : 0;
+        }
+        
         if (typeof value === 'number') {
           sum += value;
         } else if (typeof value === 'string' && !isNaN(Number(value))) {
@@ -328,7 +426,12 @@ export class ExcelService {
     cells.forEach(cell => {
       const { row, col } = this.cellToIndices(cell);
       if (row >= 0 && row < data.length && col >= 0 && col < data[row].length) {
-        const value = data[row][col];
+        // Handle complex cell objects
+        let value = data[row][col];
+        if (typeof value === 'object' && value !== null) {
+          value = value.value !== undefined ? value.value : 0;
+        }
+        
         if (typeof value === 'number') {
           sum += value;
           count++;

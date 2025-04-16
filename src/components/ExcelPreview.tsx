@@ -12,7 +12,8 @@ import {
   ArrowRight, 
   ZoomIn, 
   ZoomOut,
-  Edit3
+  Edit3,
+  Bot
 } from "lucide-react";
 import { FooterStatus } from "./FooterStatus";
 import { ExcelData } from "@/services/ExcelService";
@@ -49,8 +50,13 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
   const handleCellClick = (row: number, col: number, currentValue: any) => {
     if (!hasFile || !onCellUpdate) return;
     
+    // If the cell has a complex value with a value property
+    const actualValue = typeof currentValue === 'object' && currentValue !== null 
+      ? (currentValue.value !== undefined ? currentValue.value : currentValue)
+      : currentValue;
+    
     setEditingCell({ row, col });
-    setCellValue(String(currentValue || ""));
+    setCellValue(String(actualValue || ""));
   };
   
   const handleCellUpdate = () => {
@@ -151,7 +157,7 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
           Object.entries(excelData?.sheets || {}).map(([sheetName, sheet]) => (
             <TabsContent key={sheetName} value={sheetName} className="flex-1 p-0 m-0 flex flex-col">
               <div className="flex-1 overflow-hidden">
-                <ScrollArea className="h-full w-full" type="hover">
+                <ScrollArea className="h-full w-full" type="auto">
                   <div className="min-w-max">
                     <div 
                       className="relative" 
@@ -180,36 +186,46 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
                               </td>
                               {Array(15).fill(0).map((_, colIndex) => {
                                 const cellValue = sheet?.data?.[rowIndex]?.[colIndex] || "";
-                                const cellDisplay = typeof cellValue === 'object' && cellValue !== null ? 
-                                  (cellValue.toString ? cellValue.toString() : JSON.stringify(cellValue)) : 
-                                  String(cellValue);
+                                
+                                // Extract display value and attributes
+                                let cellDisplay: string;
+                                let isAIGenerated = false;
+                                let isFormulaCell = false;
+                                let isChartCell = false;
+                                let formula = '';
+                                
+                                if (typeof cellValue === 'object' && cellValue !== null) {
+                                  cellDisplay = cellValue.toString ? cellValue.toString() : JSON.stringify(cellValue);
+                                  isAIGenerated = cellValue.isAIGenerated === true;
+                                  isFormulaCell = 'formula' in cellValue;
+                                  isChartCell = cellValue.isChart === true || cellValue.isChartData === true;
+                                  formula = cellValue.formula || '';
+                                } else {
+                                  cellDisplay = String(cellValue);
+                                }
                                   
                                 const isActiveCell = sheet?.activeCell?.row === rowIndex && 
                                                    sheet?.activeCell?.col === colIndex;
                                 const isEditing = editingCell?.row === rowIndex && 
                                                   editingCell?.col === colIndex;
                                 
-                                const isAiGenerated = typeof cellValue === 'string' && 
-                                  cellValue.includes("AI Generated") ? "bg-apple-green-50" : "";
-                                  
-                                const isFormulaCell = typeof cellValue === 'object' && 
-                                  cellValue !== null && 'formula' in cellValue;
-                                  
-                                const isChartCell = typeof cellValue === 'object' && 
-                                  cellValue !== null && 'isChartData' in cellValue;
+                                // Set appropriate CSS classes based on cell attributes
+                                let cellClasses = "border border-apple-gray-200 p-2 text-left min-w-24 ";
+                                if (isActiveCell) cellClasses += "bg-apple-blue/10 ";
+                                if (isAIGenerated) cellClasses += "bg-apple-green-50 ";
+                                if (isFormulaCell) cellClasses += "bg-apple-blue/5 ";
+                                if (isChartCell) cellClasses += "bg-apple-orange/5 ";
+                                if (isEditing) cellClasses = cellClasses.replace("p-2", "p-0");
+                                
+                                const tooltipText = isFormulaCell ? formula : 
+                                                   (isAIGenerated ? "AI Generated Content" : "");
                                 
                                 return (
                                   <td 
                                     key={colIndex} 
-                                    className={`border border-apple-gray-200 p-2 text-left min-w-24 
-                                      ${isActiveCell ? "bg-apple-blue/10" : ""} 
-                                      ${isAiGenerated} 
-                                      ${isFormulaCell ? "bg-apple-blue/5" : ""} 
-                                      ${isChartCell ? "bg-apple-orange/5" : ""}
-                                      ${isEditing ? "p-0" : ""}
-                                    `}
+                                    className={cellClasses}
                                     onClick={() => handleCellClick(rowIndex, colIndex, cellValue)}
-                                    title={isFormulaCell ? cellValue.formula : (isAiGenerated ? "This cell was generated by AI" : "")}
+                                    title={tooltipText}
                                   >
                                     {isEditing ? (
                                       <Input
@@ -221,7 +237,14 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
                                         autoFocus
                                       />
                                     ) : (
-                                      cellDisplay
+                                      <div className="flex items-center">
+                                        {isAIGenerated && (
+                                          <Bot size={14} className="text-apple-green mr-1 flex-shrink-0" />
+                                        )}
+                                        <span className={isFormulaCell ? "text-apple-blue" : ""}>
+                                          {cellDisplay}
+                                        </span>
+                                      </div>
                                     )}
                                   </td>
                                 );

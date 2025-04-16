@@ -125,13 +125,20 @@ export class GeminiService {
         const operationMatch = response.text.match(/EXCEL_OPERATION_START\s*([\s\S]*?)\s*EXCEL_OPERATION_END/);
         if (operationMatch && operationMatch[1]) {
           try {
-            const operationData = JSON.parse(operationMatch[1].trim());
+            // Clean up the JSON content by removing markdown code block syntax if present
+            let jsonContent = operationMatch[1].trim();
+            
+            // Remove markdown code block markers if they exist
+            jsonContent = jsonContent.replace(/```json\s*/g, '').replace(/```\s*$/g, '');
+            
+            const operationData = JSON.parse(jsonContent);
             return {
               ...response,
               excelOperation: operationData
             };
           } catch (err) {
             console.error("Error parsing Excel operation JSON:", err);
+            // Continue with the response but without the operation
           }
         }
       }
@@ -262,41 +269,63 @@ export class GeminiService {
   
   // Extract implicit operations from text responses
   private static extractImplicitOperation(text: string, originalQuery: string): { type: string, data?: any } | null {
+    if (!text) return null; // Guard against undefined/null text
+    
     // Look for cell updates in the format "Put X in cell Y"
-    const cellUpdateMatch = text.match(/put|place|enter|insert|add\s+(.+?)\s+in\s+cell\s+([A-Z]+\d+)/i);
+    const cellUpdateMatch = text.match(/(put|place|enter|insert|add)\s+(.+?)\s+in\s+cell\s+([A-Z]+\d+)/i);
     if (cellUpdateMatch) {
-      const value = cellUpdateMatch[1].trim();
-      const cell = cellUpdateMatch[2].trim();
+      const value = cellUpdateMatch[2]?.trim() || "";
+      const cell = cellUpdateMatch[3]?.trim() || "";
       
-      const { row, col } = this.cellToIndices(cell);
-      
-      return {
-        type: "update_cell",
-        data: {
-          row,
-          col,
-          value: value.startsWith('=') ? value : isNaN(Number(value)) ? value : Number(value)
-        }
-      };
+      if (cell) {
+        const { row, col } = this.cellToIndices(cell);
+        
+        return {
+          type: "update_cell",
+          data: {
+            row,
+            col,
+            value: value.startsWith('=') ? value : isNaN(Number(value)) ? value : Number(value)
+          }
+        };
+      }
     }
     
     // Look for simple formulas
     const formulaMatch = text.match(/use\s+formula\s+(.+?)\s+in\s+cell\s+([A-Z]+\d+)/i);
     if (formulaMatch) {
-      const formula = formulaMatch[1].trim().startsWith('=') ? 
-        formulaMatch[1].trim() : `=${formulaMatch[1].trim()}`;
-      const cell = formulaMatch[2].trim();
+      const formula = formulaMatch[1]?.trim() || "";
+      const cell = formulaMatch[2]?.trim() || "";
       
-      const { row, col } = this.cellToIndices(cell);
-      
-      return {
-        type: "add_formula",
-        data: {
-          row,
-          col,
-          formula
-        }
-      };
+      if (cell && formula) {
+        const formulaText = formula.startsWith('=') ? formula : `=${formula}`;
+        const { row, col } = this.cellToIndices(cell);
+        
+        return {
+          type: "add_formula",
+          data: {
+            row,
+            col,
+            formula: formulaText
+          }
+        };
+      }
+    }
+
+    // Look for sum operations
+    if (/sum|total|add up/i.test(originalQuery)) {
+      const rangeMatch = text.match(/([A-Z]+\d+\s*:\s*[A-Z]+\d+)/i);
+      if (rangeMatch) {
+        // Find an empty cell to put the result
+        return {
+          type: "add_formula",
+          data: {
+            row: 10, // A reasonable default position
+            col: 1,
+            formula: `=SUM(${rangeMatch[1]})`
+          }
+        };
+      }
     }
     
     return null;
