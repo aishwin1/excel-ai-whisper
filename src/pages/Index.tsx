@@ -100,39 +100,61 @@ const Index = () => {
   };
   
   const handleProcessGeminiResponse = async (query: string): Promise<GeminiResponse> => {
-    if (excelData && (query.toLowerCase().includes("excel") || 
-        /create|insert|add|calculate|sum|formula|sort|filter|chart|graph/.test(query.toLowerCase()))) {
+    console.log("Processing query:", query);
+    
+    // For creating a new sheet
+    if (!excelData && query.toLowerCase().includes("create")) {
+      handleCreateNewSheet();
+      return {
+        text: "I've created a new blank spreadsheet for you. What would you like to do with it?",
+        isError: false
+      };
+    }
+    
+    if (excelData) {
       try {
-        const response = await GeminiService.processExcelOperation(query, excelData);
-        
-        if (response.excelOperation) {
-          const updatedData = ExcelService.applyOperation(excelData, response.excelOperation);
-          setExcelData(updatedData);
+        // Direct Excel operations
+        if (query.toLowerCase().includes("excel") || 
+            /create|insert|add|calculate|sum|formula|sort|filter|chart|graph/.test(query.toLowerCase())) {
+          console.log("Processing Excel operation");
+          const response = await GeminiService.processExcelOperation(query, excelData);
           
-          toast({
-            title: "Excel Updated",
-            description: `Applied ${response.excelOperation.type} operation`,
-            duration: 3000
-          });
+          if (response.excelOperation) {
+            console.log("Applying Excel operation:", response.excelOperation);
+            const updatedData = ExcelService.applyOperation(excelData, response.excelOperation);
+            setExcelData(updatedData);
+            
+            toast({
+              title: "Excel Updated",
+              description: `Applied ${response.excelOperation.type} operation`,
+              duration: 3000
+            });
+          }
+          
+          return response;
+        } else {
+          // Regular query with Excel context
+          return await GeminiService.processQuery(`With context of this Excel data: 
+            ${JSON.stringify(excelData.sheets[excelData.activeSheet].data.slice(0, 5))}.
+            User query: ${query}`);
         }
-        
-        return response;
       } catch (error) {
         console.error("Error processing Excel operation:", error);
         toast({
           title: "Operation Error",
-          description: "Could not apply the requested Excel operation",
+          description: "Could not process the Excel operation",
           variant: "destructive",
           duration: 3000
         });
         
         return {
-          text: "Sorry, I couldn't apply that operation to your spreadsheet. Please try a different approach.",
+          text: "Sorry, I couldn't apply that operation to your spreadsheet. Please try a simpler approach or check your input.",
           isError: true
         };
       }
     }
     
+    // Default processing for non-Excel queries
     return await GeminiService.processQuery(query);
   };
 
@@ -178,7 +200,7 @@ const Index = () => {
                 if (excelData) {
                   const updatedData = ExcelService.applyOperation(excelData, {
                     type: "update_cell",
-                    data: { row, col, value }
+                    data: { row, col, value, isAIGenerated: false }
                   });
                   setExcelData(updatedData);
                 }

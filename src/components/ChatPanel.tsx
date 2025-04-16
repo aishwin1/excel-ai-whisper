@@ -2,7 +2,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Send, Bot, Search } from "lucide-react";
+import { Send, Bot, Search, FileSpreadsheet } from "lucide-react";
 import { SampleCommands } from "./SampleCommands";
 import { GeminiResponse } from "@/services/GeminiService";
 import { ExcelData, ExcelService } from "@/services/ExcelService";
@@ -13,6 +13,10 @@ interface Message {
   content: string;
   sender: "user" | "bot";
   timestamp: Date;
+  excelOperation?: {
+    type: string;
+    description: string;
+  };
 }
 
 interface ChatPanelProps {
@@ -152,9 +156,43 @@ export const ChatPanel = ({
             isError: true
           };
         }
+      } else if (!excelData && !input.toLowerCase().includes("create")) {
+        // Handling the case when there's no Excel data
+        response = {
+          text: "I notice you don't have an Excel sheet open yet. Would you like to create a new spreadsheet or upload an existing file?",
+          isError: false
+        };
       } else {
-        // Regular Gemini query
+        // Regular Gemini query with Excel context
+        console.log("Processing Excel-related query");
         response = await onProcessQuery(input);
+        
+        // Check if the response includes Excel operations
+        if (excelData && response.excelOperation) {
+          console.log("Excel operation detected:", response.excelOperation);
+          try {
+            // Apply the operation to the Excel data
+            const updatedData = ExcelService.applyOperation(excelData, response.excelOperation);
+            onUpdateExcelData(updatedData);
+            
+            toast({
+              title: "Excel Updated",
+              description: `Applied ${response.excelOperation.type} operation successfully`,
+              duration: 3000,
+            });
+          } catch (error) {
+            console.error("Error applying Excel operation:", error);
+            toast({
+              title: "Operation Failed",
+              description: "Could not apply the Excel operation",
+              variant: "destructive",
+              duration: 3000,
+            });
+            
+            // Add error note to response
+            response.text += "\n\nNote: There was an issue applying this operation to your spreadsheet.";
+          }
+        }
       }
 
       // Replace the thinking message with the actual response
@@ -165,6 +203,10 @@ export const ChatPanel = ({
         content: response.text,
         sender: "bot",
         timestamp: new Date(),
+        excelOperation: response.excelOperation ? {
+          type: response.excelOperation.type,
+          description: `Applied ${response.excelOperation.type} operation`
+        } : undefined
       };
 
       setMessages(prev => [...prev, botMessage]);
@@ -176,12 +218,19 @@ export const ChatPanel = ({
       
       const errorMessage: Message = {
         id: (Date.now() + 2).toString(),
-        content: "I'm sorry, I encountered an error while processing your request. Please try again.",
+        content: "I'm sorry, I encountered an error while processing your request. Please try a different question or check if your Excel sheet is properly loaded.",
         sender: "bot",
         timestamp: new Date(),
       };
       
       setMessages(prev => [...prev, errorMessage]);
+      
+      toast({
+        title: "Error",
+        description: "Failed to process your request. Please try again.",
+        variant: "destructive",
+        duration: 3000,
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -220,6 +269,15 @@ export const ChatPanel = ({
               }`}
             >
               <p className="whitespace-pre-wrap">{message.content}</p>
+              
+              {/* Show Excel operation badge if applicable */}
+              {message.excelOperation && (
+                <div className="flex items-center gap-1 mt-2 bg-apple-green/10 text-apple-green text-xs py-1 px-2 rounded-full">
+                  <FileSpreadsheet size={12} />
+                  <span>{message.excelOperation.description}</span>
+                </div>
+              )}
+              
               <p className="text-xs opacity-70 mt-1">
                 {message.timestamp.toLocaleTimeString([], {
                   hour: "2-digit",
