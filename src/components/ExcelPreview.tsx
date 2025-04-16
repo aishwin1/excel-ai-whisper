@@ -37,7 +37,7 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
   const [zoomLevel, setZoomLevel] = useState(100);
   const [activeSheet, setActiveSheet] = useState<string | null>(excelData?.activeSheet || null);
   const [editingCell, setEditingCell] = useState<{ row: number, col: number } | null>(null);
-  const [cellValue, setCellValue] = useState("");
+  const [cellValue, setCellValue] = useState<string>("");
   const [activeChartTab, setActiveChartTab] = useState<string | null>(null);
   const { toast } = useToast();
   
@@ -147,7 +147,7 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
   const handleCellUpdate = () => {
     if (!hasFile || !editingCell || !activeSheet || !onCellUpdate) return;
     
-    let processedValue = cellValue;
+    let processedValue: any = cellValue;
     
     // Handle formula inputs starting with =
     if (cellValue.startsWith('=')) {

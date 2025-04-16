@@ -7,15 +7,141 @@ export interface GeminiResponse {
   };
 }
 
+export interface AgentState {
+  thinking: string;
+  status: 'idle' | 'planning' | 'executing' | 'complete';
+  steps: Array<{
+    description: string;
+    completed: boolean;
+    result?: string;
+  }>;
+  originalQuery: string;
+}
+
 export class GeminiService {
   private static API_KEY = "AIzaSyDvHZ5PRJkxXyTHfjkBUMgrpOa_iFd1HGY";
   private static API_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent";
   private static FIRECRAWL_API_KEY = "fc-eb885ba004f340d7b5f7e9ee96a6d8d1";
+  private static MAX_AGENT_ITERATIONS = 3; // Limit iterations to prevent infinite loops
+  private static currentAgentState: AgentState = {
+    thinking: "",
+    status: "idle",
+    steps: [],
+    originalQuery: ""
+  };
+
+  static getCurrentAgentState(): AgentState {
+    return this.currentAgentState;
+  }
+
+  static resetAgentState() {
+    this.currentAgentState = {
+      thinking: "",
+      status: "idle",
+      steps: [],
+      originalQuery: ""
+    };
+  }
 
   static async processQuery(prompt: string): Promise<GeminiResponse> {
+    // Reset agent state for new queries
+    if (this.currentAgentState.status === 'idle' || this.currentAgentState.originalQuery !== prompt) {
+      this.resetAgentState();
+      this.currentAgentState.originalQuery = prompt;
+    }
+
+    this.currentAgentState.status = 'planning';
+    this.currentAgentState.thinking = "Analyzing your request and planning the approach...";
+
     try {
       console.log("Calling Gemini API with prompt:", prompt.substring(0, 100) + "...");
       
+      // First, get the planning response - what steps should be taken
+      const planningResponse = await this.callGeminiAPI(`
+        You are ExcelBot, an AI assistant specialized in working with Excel spreadsheets.
+        First, analyze this user request and break it down into a series of steps:
+        "${prompt}"
+        
+        Format your response like this:
+        PLAN:
+        1. [First step description]
+        2. [Second step description]
+        ...
+        
+        REASONING:
+        [Explain your approach]
+        
+        For each step, be specific about what Excel operations will be needed (formulas, cell updates, charts, etc.)
+      `);
+
+      if (planningResponse.isError) {
+        return planningResponse;
+      }
+
+      // Extract the plan from the response
+      const planMatch = planningResponse.text.match(/PLAN:([\s\S]*?)(?:REASONING:|$)/);
+      const plan = planMatch ? planMatch[1].trim() : "";
+      
+      // Parse steps from the plan
+      const steps = plan.split(/\d+\./).filter(Boolean).map(step => ({
+        description: step.trim(),
+        completed: false
+      }));
+      
+      this.currentAgentState.steps = steps;
+      this.currentAgentState.status = 'executing';
+      this.currentAgentState.thinking = "Executing the plan...";
+
+      // Execute each step sequentially
+      let finalResponse = { text: "", isError: false };
+      
+      for (let i = 0; i < Math.min(steps.length, this.MAX_AGENT_ITERATIONS); i++) {
+        const step = steps[i];
+        const stepPrompt = `
+          Excel task: "${prompt}"
+          
+          Current step: "${step.description}"
+          
+          Please implement this specific Excel operation. Your response must include structured operations in this format:
+          EXCEL_OPERATION_START
+          {
+            "type": "update_cell | add_formula | create_chart | sort | filter",
+            "data": {
+              // Operation-specific data
+            }
+          }
+          EXCEL_OPERATION_END
+          
+          After the operation JSON block, explain what you did and why.
+        `;
+        
+        const stepResponse = await this.callGeminiAPI(stepPrompt);
+        
+        if (stepResponse.isError) {
+          step.completed = false;
+          step.result = `Error: ${stepResponse.text}`;
+          break;
+        }
+        
+        step.completed = true;
+        step.result = stepResponse.text.substring(0, 100) + "...";
+        finalResponse = stepResponse;
+      }
+      
+      this.currentAgentState.status = 'complete';
+      return finalResponse;
+    } catch (error) {
+      console.error("Error in processQuery:", error);
+      this.currentAgentState.status = 'complete';
+      return { 
+        text: "Sorry, I encountered an error while processing your request. Please try a simpler query or check your internet connection.", 
+        isError: true 
+      };
+    }
+  }
+
+  private static async callGeminiAPI(prompt: string): Promise<GeminiResponse> {
+    try {
       const response = await fetch(`${this.API_URL}?key=${this.API_KEY}`, {
         method: 'POST',
         headers: {
@@ -111,6 +237,9 @@ export class GeminiService {
 
   // Function to analyze and process Excel operations
   static async processExcelOperation(operation: string, currentData: any): Promise<GeminiResponse> {
+    // Update agent state
+    this.currentAgentState.thinking = `Processing operation: ${operation}`;
+    
     try {
       const activeSheetName = currentData.activeSheet;
       const sheetData = currentData.sheets[activeSheetName].data;
@@ -172,7 +301,17 @@ export class GeminiService {
         `;
       }
       
-      const response = await this.processQuery(prompt);
+      const response = await this.callGeminiAPI(prompt);
+      
+      // Add the operation to our steps
+      if (this.currentAgentState.status === 'executing') {
+        const lastIncompleteStep = this.currentAgentState.steps.find(step => !step.completed);
+        if (lastIncompleteStep) {
+          lastIncompleteStep.completed = true;
+          lastIncompleteStep.result = operation + " - " + (response.excelOperation?.type || "processed");
+        }
+      }
+      
       return response;
     } catch (error) {
       console.error("Error processing Excel operation:", error);
@@ -522,5 +661,19 @@ export class GeminiService {
       index = index * 26 + col.charCodeAt(i) - 64;
     }
     return index - 1; // Convert to 0-based
+  }
+  
+  // Helper to convert index to column letter
+  private static indexToColumn(index: number): string {
+    let column = '';
+    index += 1; // Convert to 1-based
+    
+    while (index > 0) {
+      const remainder = (index - 1) % 26;
+      column = String.fromCharCode(65 + remainder) + column;
+      index = Math.floor((index - remainder) / 26);
+    }
+    
+    return column;
   }
 }
