@@ -2,19 +2,37 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileSpreadsheet, Plus, Table, BarChart3, ArrowDownUp, ArrowLeft, ArrowRight, ZoomIn, ZoomOut } from "lucide-react";
+import { 
+  FileSpreadsheet, 
+  Plus, 
+  Table, 
+  BarChart3, 
+  ArrowDownUp, 
+  ArrowLeft, 
+  ArrowRight, 
+  ZoomIn, 
+  ZoomOut,
+  Edit3
+} from "lucide-react";
 import { FooterStatus } from "./FooterStatus";
 import { ExcelData } from "@/services/ExcelService";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/use-toast";
 
 interface ExcelPreviewProps {
   excelData: ExcelData | null;
   setShowFileUpload: (show: boolean) => void;
+  onCellUpdate?: (sheetName: string, row: number, col: number, value: any) => void;
 }
 
-export const ExcelPreview = ({ excelData, setShowFileUpload }: ExcelPreviewProps) => {
+export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: ExcelPreviewProps) => {
   const hasFile = !!excelData;
   const [zoomLevel, setZoomLevel] = useState(100);
+  const [activeSheet, setActiveSheet] = useState<string | null>(excelData?.activeSheet || null);
+  const [editingCell, setEditingCell] = useState<{ row: number, col: number } | null>(null);
+  const [cellValue, setCellValue] = useState("");
+  const { toast } = useToast();
   
   const handleCreateSheet = () => {
     setShowFileUpload(true);
@@ -27,11 +45,58 @@ export const ExcelPreview = ({ excelData, setShowFileUpload }: ExcelPreviewProps
   const handleZoomOut = () => {
     setZoomLevel(prev => Math.max(prev - 10, 50));
   };
+  
+  const handleCellClick = (row: number, col: number, currentValue: any) => {
+    if (!hasFile || !onCellUpdate) return;
+    
+    setEditingCell({ row, col });
+    setCellValue(String(currentValue || ""));
+  };
+  
+  const handleCellUpdate = () => {
+    if (!hasFile || !editingCell || !activeSheet || !onCellUpdate) return;
+    
+    // Try to convert to number if possible
+    const processedValue = !isNaN(Number(cellValue)) && cellValue.trim() !== '' ? 
+      Number(cellValue) : cellValue;
+    
+    onCellUpdate(activeSheet, editingCell.row, editingCell.col, processedValue);
+    setEditingCell(null);
+    
+    toast({
+      title: "Cell updated",
+      description: `Updated cell ${String.fromCharCode(65 + editingCell.col)}${editingCell.row + 1}`,
+      duration: 2000,
+    });
+  };
+  
+  const handleCellBlur = () => {
+    handleCellUpdate();
+  };
+  
+  const handleCellKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleCellUpdate();
+    } else if (e.key === 'Escape') {
+      setEditingCell(null);
+    }
+  };
+  
+  const handleTabChange = (value: string) => {
+    if (excelData) {
+      setActiveSheet(value);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full">
-      <Tabs defaultValue={excelData?.activeSheet || "sheet1"} className="flex-1 flex flex-col">
-        <div className="flex items-center justify-between border-b border-apple-gray-200 px-4">
+      <Tabs 
+        defaultValue={excelData?.activeSheet || "sheet1"} 
+        className="flex-1 flex flex-col"
+        onValueChange={handleTabChange}
+      >
+        <div className="flex items-center justify-between border-b border-apple-gray-200 px-4 bg-white">
           <TabsList className="h-10">
             {hasFile ? (
               Object.keys(excelData?.sheets || {}).map((sheetName) => (
@@ -74,17 +139,9 @@ export const ExcelPreview = ({ excelData, setShowFileUpload }: ExcelPreviewProps
                 variant="ghost" 
                 size="sm" 
                 className="h-8 w-8 p-0"
-                title="Scroll Left"
+                title="Edit Mode"
               >
-                <ArrowLeft size={14} />
-              </Button>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                className="h-8 w-8 p-0"
-                title="Scroll Right"
-              >
-                <ArrowRight size={14} />
+                <Edit3 size={14} />
               </Button>
             </div>
           )}
@@ -93,9 +150,9 @@ export const ExcelPreview = ({ excelData, setShowFileUpload }: ExcelPreviewProps
         {hasFile ? (
           Object.entries(excelData?.sheets || {}).map(([sheetName, sheet]) => (
             <TabsContent key={sheetName} value={sheetName} className="flex-1 p-0 m-0 flex flex-col">
-              <div className="flex-1 overflow-hidden relative">
-                <ScrollArea className="h-full w-full">
-                  <div className="min-w-max overflow-auto">
+              <div className="flex-1 overflow-hidden">
+                <ScrollArea className="h-full w-full" type="hover">
+                  <div className="min-w-max">
                     <div 
                       className="relative" 
                       style={{ 
@@ -123,16 +180,49 @@ export const ExcelPreview = ({ excelData, setShowFileUpload }: ExcelPreviewProps
                               </td>
                               {Array(15).fill(0).map((_, colIndex) => {
                                 const cellValue = sheet?.data?.[rowIndex]?.[colIndex] || "";
+                                const cellDisplay = typeof cellValue === 'object' && cellValue !== null ? 
+                                  (cellValue.toString ? cellValue.toString() : JSON.stringify(cellValue)) : 
+                                  String(cellValue);
+                                  
+                                const isActiveCell = sheet?.activeCell?.row === rowIndex && 
+                                                   sheet?.activeCell?.col === colIndex;
+                                const isEditing = editingCell?.row === rowIndex && 
+                                                  editingCell?.col === colIndex;
+                                
                                 const isAiGenerated = typeof cellValue === 'string' && 
                                   cellValue.includes("AI Generated") ? "bg-apple-green-50" : "";
+                                  
+                                const isFormulaCell = typeof cellValue === 'object' && 
+                                  cellValue !== null && 'formula' in cellValue;
+                                  
+                                const isChartCell = typeof cellValue === 'object' && 
+                                  cellValue !== null && 'isChartData' in cellValue;
                                 
                                 return (
                                   <td 
                                     key={colIndex} 
-                                    className={`border border-apple-gray-200 p-2 text-left min-w-24 ${isAiGenerated}`}
-                                    title={isAiGenerated ? "This cell was generated by AI" : ""}
+                                    className={`border border-apple-gray-200 p-2 text-left min-w-24 
+                                      ${isActiveCell ? "bg-apple-blue/10" : ""} 
+                                      ${isAiGenerated} 
+                                      ${isFormulaCell ? "bg-apple-blue/5" : ""} 
+                                      ${isChartCell ? "bg-apple-orange/5" : ""}
+                                      ${isEditing ? "p-0" : ""}
+                                    `}
+                                    onClick={() => handleCellClick(rowIndex, colIndex, cellValue)}
+                                    title={isFormulaCell ? cellValue.formula : (isAiGenerated ? "This cell was generated by AI" : "")}
                                   >
-                                    {cellValue}
+                                    {isEditing ? (
+                                      <Input
+                                        className="h-full border-0 focus-visible:ring-0"
+                                        value={cellValue}
+                                        onChange={(e) => setCellValue(e.target.value)}
+                                        onBlur={handleCellBlur}
+                                        onKeyDown={handleCellKeyDown}
+                                        autoFocus
+                                      />
+                                    ) : (
+                                      cellDisplay
+                                    )}
                                   </td>
                                 );
                               })}
