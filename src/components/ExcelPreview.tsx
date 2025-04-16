@@ -13,13 +13,18 @@ import {
   ZoomIn, 
   ZoomOut,
   Edit3,
-  Bot
+  Bot,
+  BarChart,
+  LineChart,
+  PieChart,
+  Target
 } from "lucide-react";
 import { FooterStatus } from "./FooterStatus";
 import { ExcelData } from "@/services/ExcelService";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/use-toast";
+import { ExcelCharts } from "./ExcelCharts";
 
 interface ExcelPreviewProps {
   excelData: ExcelData | null;
@@ -33,6 +38,7 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
   const [activeSheet, setActiveSheet] = useState<string | null>(excelData?.activeSheet || null);
   const [editingCell, setEditingCell] = useState<{ row: number, col: number } | null>(null);
   const [cellValue, setCellValue] = useState("");
+  const [activeChartTab, setActiveChartTab] = useState<string | null>(null);
   const { toast } = useToast();
   
   const handleCreateSheet = () => {
@@ -46,6 +52,85 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
   const handleZoomOut = () => {
     setZoomLevel(prev => Math.max(prev - 10, 50));
   };
+  
+  // Check if there are any charts in the data
+  const hasCharts = hasFile && excelData && Object.values(excelData.sheets).some(
+    sheet => sheet.data?.some(row => 
+      row?.some(cell => 
+        typeof cell === 'object' && 
+        cell !== null && 
+        (cell.isChart === true || cell.chartType)
+      )
+    )
+  );
+
+  // Function to extract chart data from the excel data
+  const getChartData = () => {
+    if (!hasFile || !excelData) return [];
+    
+    const charts = [];
+    const sheet = excelData.sheets[excelData.activeSheet];
+    
+    if (sheet?.data) {
+      // Look for cells marked as charts
+      for (let row = 0; row < sheet.data.length; row++) {
+        for (let col = 0; col < (sheet.data[row]?.length || 0); col++) {
+          const cell = sheet.data[row][col];
+          
+          if (typeof cell === 'object' && cell !== null && (cell.isChart || cell.chartType)) {
+            // Extract chart type and title
+            const chartType = cell.chartType || 'bar';
+            const chartTitle = sheet.data[row]?.[col + 1]?.value || 
+                              (typeof sheet.data[row]?.[col + 1] === 'string' ? sheet.data[row][col + 1] : 'Chart');
+            
+            // Extract data from the adjacent cells (typically below the chart cell)
+            const chartData = [];
+            
+            // Determine the range for data extraction (typical chart data pattern)
+            const dataStartRow = row + 1;
+            const dataEndRow = Math.min(dataStartRow + 10, sheet.data.length);
+            
+            for (let dataRow = dataStartRow; dataRow < dataEndRow; dataRow++) {
+              if (!sheet.data[dataRow]) continue;
+              
+              // First column might be labels
+              const label = sheet.data[dataRow][col];
+              const value = sheet.data[dataRow][col + 1];
+              
+              if (label !== undefined) {
+                // Convert cell object to value if needed
+                const labelValue = typeof label === 'object' && label !== null ? 
+                                 (label.value !== undefined ? label.value : label) : label;
+                                 
+                const dataValue = typeof value === 'object' && value !== null ? 
+                                (value.value !== undefined ? value.value : value) : value;
+                
+                // Only add if we have both label and value
+                if (labelValue !== undefined && labelValue !== '') {
+                  chartData.push({
+                    name: String(labelValue),
+                    value: !isNaN(Number(dataValue)) ? Number(dataValue) : 0
+                  });
+                }
+              }
+            }
+            
+            if (chartData.length > 0) {
+              charts.push({
+                type: chartType,
+                title: chartTitle,
+                data: chartData
+              });
+            }
+          }
+        }
+      }
+    }
+    
+    return charts;
+  };
+  
+  const chartData = getChartData();
   
   const handleCellClick = (row: number, col: number, currentValue: any) => {
     if (!hasFile || !onCellUpdate) return;
@@ -62,9 +147,21 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
   const handleCellUpdate = () => {
     if (!hasFile || !editingCell || !activeSheet || !onCellUpdate) return;
     
-    // Try to convert to number if possible
-    const processedValue = !isNaN(Number(cellValue)) && cellValue.trim() !== '' ? 
-      Number(cellValue) : cellValue;
+    let processedValue = cellValue;
+    
+    // Handle formula inputs starting with =
+    if (cellValue.startsWith('=')) {
+      processedValue = {
+        value: cellValue,
+        formula: cellValue,
+        isAIGenerated: false,
+        toString: function() { return String(this.value); }
+      };
+    } else {
+      // Try to convert to number if possible
+      processedValue = !isNaN(Number(cellValue)) && cellValue.trim() !== '' ? 
+        Number(cellValue) : cellValue;
+    }
     
     onCellUpdate(activeSheet, editingCell.row, editingCell.col, processedValue);
     setEditingCell(null);
@@ -92,6 +189,8 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
   const handleTabChange = (value: string) => {
     if (excelData) {
       setActiveSheet(value);
+      // Reset chart tab when changing sheets
+      setActiveChartTab(null);
     }
   };
 
@@ -122,6 +221,33 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
 
           {hasFile && (
             <div className="flex items-center gap-2">
+              {chartData.length > 0 && (
+                <div className="flex items-center border rounded-md overflow-hidden mr-2">
+                  <Button 
+                    variant={activeChartTab === null ? "secondary" : "ghost"}
+                    size="sm" 
+                    className="h-8 px-3" 
+                    onClick={() => setActiveChartTab(null)}
+                  >
+                    <Table size={14} className="mr-1" /> Data
+                  </Button>
+                  {chartData.map((chart, index) => (
+                    <Button 
+                      key={index}
+                      variant={activeChartTab === `chart-${index}` ? "secondary" : "ghost"}
+                      size="sm" 
+                      className="h-8 px-3" 
+                      onClick={() => setActiveChartTab(`chart-${index}`)}
+                    >
+                      {chart.type === 'bar' && <BarChart3 size={14} className="mr-1" />}
+                      {chart.type === 'line' && <LineChart size={14} className="mr-1" />}
+                      {chart.type === 'pie' && <PieChart size={14} className="mr-1" />}
+                      {chart.type === 'radar' && <Target size={14} className="mr-1" />}
+                      Chart {index + 1}
+                    </Button>
+                  ))}
+                </div>
+              )}
               <Button 
                 variant="ghost" 
                 size="sm" 
@@ -156,107 +282,135 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
         {hasFile ? (
           Object.entries(excelData?.sheets || {}).map(([sheetName, sheet]) => (
             <TabsContent key={sheetName} value={sheetName} className="flex-1 p-0 m-0 flex flex-col">
-              <div className="flex-1 overflow-hidden">
-                <ScrollArea className="h-full w-full" type="auto">
-                  <div className="min-w-max">
-                    <div 
-                      className="relative" 
-                      style={{ 
-                        transform: `scale(${zoomLevel / 100})`, 
-                        transformOrigin: 'top left',
-                        width: zoomLevel < 100 ? `${100 / (zoomLevel / 100)}%` : 'auto'
-                      }}
-                    >
-                      <table className="min-w-full border-collapse">
-                        <thead className="sticky top-0 z-10 bg-apple-gray-100">
-                          <tr>
-                            <th className="border border-apple-gray-200 p-2 text-center w-10 sticky left-0 z-20 bg-apple-gray-100"></th>
-                            {Array(15).fill(0).map((_, i) => (
-                              <th key={i} className="border border-apple-gray-200 p-2 text-center font-medium text-apple-gray-700 min-w-24">
-                                {String.fromCharCode(65 + i)}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {Array(Math.max(sheet?.data?.length || 0, 20)).fill(0).map((_, rowIndex) => (
-                            <tr key={rowIndex} className={rowIndex % 2 === 0 ? "bg-white" : "bg-apple-gray-50/50"}>
-                              <td className="border border-apple-gray-200 p-2 text-center font-medium text-apple-gray-700 bg-apple-gray-100/70 w-10 sticky left-0 z-10">
-                                {rowIndex + 1}
-                              </td>
-                              {Array(15).fill(0).map((_, colIndex) => {
-                                const cellValue = sheet?.data?.[rowIndex]?.[colIndex] || "";
-                                
-                                // Extract display value and attributes
-                                let cellDisplay: string;
-                                let isAIGenerated = false;
-                                let isFormulaCell = false;
-                                let isChartCell = false;
-                                let formula = '';
-                                
-                                if (typeof cellValue === 'object' && cellValue !== null) {
-                                  cellDisplay = cellValue.toString ? cellValue.toString() : JSON.stringify(cellValue);
-                                  isAIGenerated = cellValue.isAIGenerated === true;
-                                  isFormulaCell = 'formula' in cellValue;
-                                  isChartCell = cellValue.isChart === true || cellValue.isChartData === true;
-                                  formula = cellValue.formula || '';
-                                } else {
-                                  cellDisplay = String(cellValue);
-                                }
-                                  
-                                const isActiveCell = sheet?.activeCell?.row === rowIndex && 
-                                                   sheet?.activeCell?.col === colIndex;
-                                const isEditing = editingCell?.row === rowIndex && 
-                                                  editingCell?.col === colIndex;
-                                
-                                // Set appropriate CSS classes based on cell attributes
-                                let cellClasses = "border border-apple-gray-200 p-2 text-left min-w-24 ";
-                                if (isActiveCell) cellClasses += "bg-apple-blue/10 ";
-                                if (isAIGenerated) cellClasses += "bg-apple-green-50 ";
-                                if (isFormulaCell) cellClasses += "bg-apple-blue/5 ";
-                                if (isChartCell) cellClasses += "bg-apple-orange/5 ";
-                                if (isEditing) cellClasses = cellClasses.replace("p-2", "p-0");
-                                
-                                const tooltipText = isFormulaCell ? formula : 
-                                                   (isAIGenerated ? "AI Generated Content" : "");
-                                
-                                return (
-                                  <td 
-                                    key={colIndex} 
-                                    className={cellClasses}
-                                    onClick={() => handleCellClick(rowIndex, colIndex, cellValue)}
-                                    title={tooltipText}
-                                  >
-                                    {isEditing ? (
-                                      <Input
-                                        className="h-full border-0 focus-visible:ring-0"
-                                        value={cellValue}
-                                        onChange={(e) => setCellValue(e.target.value)}
-                                        onBlur={handleCellBlur}
-                                        onKeyDown={handleCellKeyDown}
-                                        autoFocus
-                                      />
-                                    ) : (
-                                      <div className="flex items-center">
-                                        {isAIGenerated && (
-                                          <Bot size={14} className="text-apple-green mr-1 flex-shrink-0" />
-                                        )}
-                                        <span className={isFormulaCell ? "text-apple-blue" : ""}>
-                                          {cellDisplay}
-                                        </span>
-                                      </div>
-                                    )}
-                                  </td>
-                                );
-                              })}
+              {/* Show either the chart view or the data view */}
+              {activeChartTab && hasFile ? (
+                <div className="flex-1 p-4 overflow-hidden">
+                  {chartData.map((chart, index) => {
+                    if (activeChartTab === `chart-${index}`) {
+                      return (
+                        <ExcelCharts 
+                          key={index}
+                          type={chart.type as "bar" | "line" | "pie" | "radar"}
+                          data={chart.data}
+                          title={chart.title}
+                        />
+                      );
+                    }
+                    return null;
+                  })}
+                </div>
+              ) : (
+                <div className="flex-1 overflow-hidden">
+                  <ScrollArea className="h-full w-full" type="auto">
+                    <div className="min-w-max">
+                      <div 
+                        className="relative" 
+                        style={{ 
+                          transform: `scale(${zoomLevel / 100})`, 
+                          transformOrigin: 'top left',
+                          width: zoomLevel < 100 ? `${100 / (zoomLevel / 100)}%` : 'auto'
+                        }}
+                      >
+                        <table className="min-w-full border-collapse">
+                          <thead className="sticky top-0 z-10 bg-apple-gray-100">
+                            <tr>
+                              <th className="border border-apple-gray-200 p-2 text-center w-10 sticky left-0 z-20 bg-apple-gray-100"></th>
+                              {Array(15).fill(0).map((_, i) => (
+                                <th key={i} className="border border-apple-gray-200 p-2 text-center font-medium text-apple-gray-700 min-w-24">
+                                  {String.fromCharCode(65 + i)}
+                                </th>
+                              ))}
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {Array(Math.max(sheet?.data?.length || 0, 20)).fill(0).map((_, rowIndex) => (
+                              <tr key={rowIndex} className={rowIndex % 2 === 0 ? "bg-white" : "bg-apple-gray-50/50"}>
+                                <td className="border border-apple-gray-200 p-2 text-center font-medium text-apple-gray-700 bg-apple-gray-100/70 w-10 sticky left-0 z-10">
+                                  {rowIndex + 1}
+                                </td>
+                                {Array(15).fill(0).map((_, colIndex) => {
+                                  const cellValue = sheet?.data?.[rowIndex]?.[colIndex] || "";
+                                  
+                                  // Extract display value and attributes
+                                  let cellDisplay: string;
+                                  let isAIGenerated = false;
+                                  let isFormulaCell = false;
+                                  let isChartCell = false;
+                                  let formula = '';
+                                  
+                                  if (typeof cellValue === 'object' && cellValue !== null) {
+                                    // For formula cells, show formula value
+                                    if (cellValue.formula) {
+                                      cellDisplay = String(cellValue.formula);
+                                      isFormulaCell = true;
+                                      formula = cellValue.formula;
+                                    } else {
+                                      cellDisplay = cellValue.value !== undefined ? String(cellValue.value) : 
+                                                  (cellValue.toString ? cellValue.toString() : JSON.stringify(cellValue));
+                                    }
+                                    isAIGenerated = cellValue.isAIGenerated === true;
+                                    isChartCell = cellValue.isChart === true || cellValue.isChartData === true || cellValue.chartType;
+                                  } else {
+                                    cellDisplay = String(cellValue);
+                                  }
+                                    
+                                  const isActiveCell = sheet?.activeCell?.row === rowIndex && 
+                                                     sheet?.activeCell?.col === colIndex;
+                                  const isEditing = editingCell?.row === rowIndex && 
+                                                    editingCell?.col === colIndex;
+                                  
+                                  // Set appropriate CSS classes based on cell attributes
+                                  let cellClasses = "border border-apple-gray-200 p-2 text-left min-w-24 ";
+                                  if (isActiveCell) cellClasses += "bg-apple-blue/10 ";
+                                  if (isAIGenerated) cellClasses += "bg-apple-green-50 ";
+                                  if (isFormulaCell) cellClasses += "bg-apple-blue/5 ";
+                                  if (isChartCell) cellClasses += "bg-apple-orange/5 ";
+                                  if (isEditing) cellClasses = cellClasses.replace("p-2", "p-0");
+                                  
+                                  const tooltipText = isFormulaCell ? formula : 
+                                                     (isAIGenerated ? "AI Generated Content" : "");
+                                  
+                                  return (
+                                    <td 
+                                      key={colIndex} 
+                                      className={cellClasses}
+                                      onClick={() => handleCellClick(rowIndex, colIndex, cellValue)}
+                                      title={tooltipText}
+                                    >
+                                      {isEditing ? (
+                                        <Input
+                                          className="h-full border-0 focus-visible:ring-0"
+                                          value={cellValue}
+                                          onChange={(e) => setCellValue(e.target.value)}
+                                          onBlur={handleCellBlur}
+                                          onKeyDown={handleCellKeyDown}
+                                          autoFocus
+                                        />
+                                      ) : (
+                                        <div className="flex items-center">
+                                          {isAIGenerated && (
+                                            <Bot size={14} className="text-apple-green mr-1 flex-shrink-0" />
+                                          )}
+                                          {isChartCell && !isFormulaCell && (
+                                            <BarChart3 size={14} className="text-apple-orange mr-1 flex-shrink-0" />
+                                          )}
+                                          <span className={isFormulaCell ? "text-apple-blue" : ""}>
+                                            {cellDisplay}
+                                          </span>
+                                        </div>
+                                      )}
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
-                </ScrollArea>
-              </div>
+                  </ScrollArea>
+                </div>
+              )}
               <FooterStatus />
             </TabsContent>
           ))

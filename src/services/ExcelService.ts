@@ -8,6 +8,11 @@ export interface ExcelData {
         row: number;
         col: number;
       };
+      charts?: {
+        type: string;
+        title: string;
+        data: any[];
+      }[];
     };
   };
   activeSheet: string;
@@ -119,17 +124,38 @@ export class ExcelService {
             }
             
             // Update the cell with the value
-            const value = operation.data.value;
-            sheetData[operation.data.row][operation.data.col] = value;
+            let value = operation.data.value;
             
+            // Handle formula inputs in update_cell too
+            if (typeof value === 'string' && value.startsWith('=')) {
+              try {
+                const formulaResult = this.calculateFormula(value, sheetData);
+                value = {
+                  value: formulaResult !== null ? formulaResult : value,
+                  formula: value,
+                  isAIGenerated: true,
+                  toString: function() { return String(this.formula); }
+                };
+              } catch (error) {
+                console.error("Formula calculation error in update_cell:", error);
+                value = {
+                  value: value,
+                  formula: value,
+                  isAIGenerated: true,
+                  toString: function() { return String(this.formula); }
+                };
+              }
+            } 
             // Mark the cell as AI-generated
-            if (typeof value === 'string' || typeof value === 'number') {
-              sheetData[operation.data.row][operation.data.col] = {
+            else if (typeof value === 'string' || typeof value === 'number') {
+              value = {
                 value: value,
                 isAIGenerated: true,
                 toString: function() { return String(this.value); }
               };
             }
+            
+            sheetData[operation.data.row][operation.data.col] = value;
 
             // Set this cell as active
             updatedData.sheets[activeSheet].activeCell = {
@@ -169,32 +195,20 @@ export class ExcelService {
             }
             
             // Process the formula result if possible
+            let cellValue;
             if (formula.startsWith('=')) {
               try {
                 const formulaResult = this.calculateFormula(formula, sheetData);
-                if (formulaResult !== null) {
-                  // Show formula result as a string with the formula as title
-                  sheetData[row][col] = {
-                    value: formulaResult,
-                    formula: formula,
-                    isAIGenerated: true,
-                    toString: function() { return String(this.value); }
-                  };
-                  console.log("Formula calculated successfully:", formulaResult);
-                } else {
-                  // Store the formula directly if calculation failed
-                  sheetData[row][col] = {
-                    value: formula,
-                    formula: formula,
-                    isAIGenerated: true,
-                    toString: function() { return this.formula; }
-                  };
-                  console.log("Formula stored without calculation");
-                }
+                cellValue = {
+                  value: formulaResult !== null ? formulaResult : formula,
+                  formula: formula,
+                  isAIGenerated: true,
+                  toString: function() { return String(this.formula); }
+                };
               } catch (error) {
                 console.error("Formula calculation error:", error);
                 // Keep the formula as is if calculation fails
-                sheetData[row][col] = {
+                cellValue = {
                   value: formula,
                   formula: formula,
                   isAIGenerated: true,
@@ -203,12 +217,14 @@ export class ExcelService {
               }
             } else {
               // Not a formula, just add the text
-              sheetData[row][col] = {
+              cellValue = {
                 value: formula,
                 isAIGenerated: true,
                 toString: function() { return String(this.value); }
               };
             }
+            
+            sheetData[row][col] = cellValue;
 
             // Set this cell as active
             updatedData.sheets[activeSheet].activeCell = {
@@ -219,49 +235,110 @@ export class ExcelService {
           break;
           
         case "create_chart":
-          // In a real implementation, this would create a chart object
-          // For now, we'll just add a placeholder text and mark the cells used for the chart
           if (operation.data?.chartType) {
+            const chartType = operation.data.chartType || 'bar';
+            const chartTitle = operation.data.title || 'Chart';
             const startRow = 1; // Start at row 1 (after header)
-            const startCol = 0;
-            const chartRows = 5;
-            const chartCols = 3;
+            const startCol = 0; 
             
             // Create chart placeholder
             sheetData[startRow][startCol] = {
-              value: `[Chart: ${operation.data.chartType}]`,
+              value: `[${chartType} Chart]`,
               isAIGenerated: true,
               isChart: true,
-              chartType: operation.data.chartType,
+              chartType: chartType,
               toString: function() { return this.value; }
             };
             
             sheetData[startRow][startCol + 1] = {
-              value: `${operation.data.title || 'Chart Title'}`,
+              value: chartTitle,
               isAIGenerated: true,
               isChart: true,
               toString: function() { return this.value; }
             };
             
-            // Mark the chart area with background color
-            for (let r = startRow; r < startRow + chartRows && r < sheetData.length; r++) {
-              if (!sheetData[r]) sheetData[r] = [];
-              for (let c = startCol; c < startCol + chartCols && c < 15; c++) {
-                if (r === startRow && c === startCol) continue; // Skip the chart title cell
-                if (!sheetData[r][c]) sheetData[r][c] = '';
-                // Mark cells as chart data
-                if (typeof sheetData[r][c] === 'string' || typeof sheetData[r][c] === 'number') {
-                  sheetData[r][c] = {
-                    value: sheetData[r][c],
-                    isChartData: true,
+            // Generate sample data for the chart if none provided
+            if (!operation.data.data || operation.data.data.length === 0) {
+              // Add header row for the chart data
+              sheetData[startRow + 1][startCol] = {
+                value: "Category",
+                isAIGenerated: true,
+                isChartData: true,
+                toString: function() { return String(this.value); }
+              };
+              
+              sheetData[startRow + 1][startCol + 1] = {
+                value: "Value",
+                isAIGenerated: true,
+                isChartData: true,
+                toString: function() { return String(this.value); }
+              };
+              
+              // Add sample data rows
+              const categories = ['A', 'B', 'C', 'D', 'E'];
+              for (let i = 0; i < 5; i++) {
+                sheetData[startRow + 2 + i][startCol] = {
+                  value: `Category ${categories[i]}`,
+                  isAIGenerated: true,
+                  isChartData: true,
+                  toString: function() { return String(this.value); }
+                };
+                
+                const randomValue = Math.floor(Math.random() * 100) + 20;
+                sheetData[startRow + 2 + i][startCol + 1] = {
+                  value: randomValue,
+                  isAIGenerated: true,
+                  isChartData: true,
+                  toString: function() { return String(this.value); }
+                };
+              }
+            } else {
+              // Use provided data
+              sheetData[startRow + 1][startCol] = {
+                value: "Category",
+                isAIGenerated: true,
+                isChartData: true,
+                toString: function() { return String(this.value); }
+              };
+              
+              sheetData[startRow + 1][startCol + 1] = {
+                value: "Value",
+                isAIGenerated: true,
+                isChartData: true,
+                toString: function() { return String(this.value); }
+              };
+              
+              operation.data.data.forEach((item, index) => {
+                if (index < 10) { // Limit to 10 data points
+                  sheetData[startRow + 2 + index][startCol] = {
+                    value: item.name || `Item ${index + 1}`,
                     isAIGenerated: true,
+                    isChartData: true,
+                    toString: function() { return String(this.value); }
+                  };
+                  
+                  sheetData[startRow + 2 + index][startCol + 1] = {
+                    value: item.value || 0,
+                    isAIGenerated: true,
+                    isChartData: true,
                     toString: function() { return String(this.value); }
                   };
                 }
-              }
+              });
             }
             
-            console.log("Chart placeholder created:", operation.data.chartType);
+            // Store chart metadata
+            if (!updatedData.sheets[activeSheet].charts) {
+              updatedData.sheets[activeSheet].charts = [];
+            }
+            
+            updatedData.sheets[activeSheet].charts.push({
+              type: chartType,
+              title: chartTitle,
+              data: [] // This would be populated with actual data
+            });
+            
+            console.log("Chart created successfully:", chartType);
           }
           break;
           
@@ -336,43 +413,55 @@ export class ExcelService {
       }
     } catch (error) {
       console.error("Error applying Excel operation:", error);
+      throw error; // Rethrow so the error can be handled by the caller
     }
     
     return updatedData;
   }
   
-  // Helper method for simple formula calculation
   static calculateFormula(formula: string, data: any[][]): number | null {
-    // Remove the = at the start
-    const formulaText = formula.substring(1).trim();
-    
-    // Handle SUM formula
-    if (formulaText.toUpperCase().startsWith('SUM(') && formulaText.endsWith(')')) {
-      const range = formulaText.substring(4, formulaText.length - 1);
-      return this.calculateSum(range, data);
+    if (!formula.startsWith('=')) {
+      return null; // Not a formula
     }
     
-    // Handle AVERAGE formula
-    if (formulaText.toUpperCase().startsWith('AVERAGE(') && formulaText.endsWith(')')) {
-      const range = formulaText.substring(8, formulaText.length - 1);
-      return this.calculateAverage(range, data);
-    }
-    
-    // Handle COUNT formula
-    if (formulaText.toUpperCase().startsWith('COUNT(') && formulaText.endsWith(')')) {
-      const range = formulaText.substring(6, formulaText.length - 1);
-      return this.countCells(range, data);
-    }
-    
-    // Handle simple mathematical expressions
     try {
+      // Remove the = at the start
+      const formulaText = formula.substring(1).trim();
+      
+      // Handle common Excel functions
+      if (formulaText.toUpperCase().startsWith('SUM(') && formulaText.endsWith(')')) {
+        const range = formulaText.substring(4, formulaText.length - 1);
+        return this.calculateSum(range, data);
+      }
+      
+      if (formulaText.toUpperCase().startsWith('AVERAGE(') && formulaText.endsWith(')')) {
+        const range = formulaText.substring(8, formulaText.length - 1);
+        return this.calculateAverage(range, data);
+      }
+      
+      if (formulaText.toUpperCase().startsWith('COUNT(') && formulaText.endsWith(')')) {
+        const range = formulaText.substring(6, formulaText.length - 1);
+        return this.countCells(range, data);
+      }
+
+      if (formulaText.toUpperCase().startsWith('MAX(') && formulaText.endsWith(')')) {
+        const range = formulaText.substring(4, formulaText.length - 1);
+        return this.calculateMax(range, data);
+      }
+      
+      if (formulaText.toUpperCase().startsWith('MIN(') && formulaText.endsWith(')')) {
+        const range = formulaText.substring(4, formulaText.length - 1);
+        return this.calculateMin(range, data);
+      }
+      
+      // Handle simple mathematical expressions
       // Replace cell references like A1, B2, etc. with their values
       let processedFormula = formulaText.replace(/([A-Z]+)(\d+)/g, (match, col, row) => {
         const colIndex = this.columnToIndex(col);
         const rowIndex = parseInt(row) - 1;
         
         if (rowIndex >= 0 && rowIndex < data.length && 
-            colIndex >= 0 && colIndex < data[rowIndex].length) {
+            colIndex >= 0 && colIndex < (data[rowIndex]?.length || 0)) {
           const cellValue = data[rowIndex][colIndex];
           
           // Handle complex cell objects
@@ -380,16 +469,17 @@ export class ExcelService {
                        (cellValue.value !== undefined ? cellValue.value : 0) :
                        cellValue;
           
-          return typeof value === 'number' ? value.toString() : 
-                (typeof value === 'string' && !isNaN(Number(value)) ? value : '0');
+          // Convert to number if possible, otherwise use 0
+          const numValue = !isNaN(Number(value)) ? Number(value) : 0;
+          return numValue.toString();
         }
-        return '0';
+        return '0'; // Default for invalid cell references
       });
       
-      // Safely evaluate the expression
+      // Safely evaluate the mathematical expression
       return Function('"use strict"; return (' + processedFormula + ')')();
     } catch (error) {
-      console.error("Error evaluating formula:", error);
+      console.error("Error evaluating formula:", error, formula);
       return null;
     }
   }
@@ -399,19 +489,23 @@ export class ExcelService {
     let sum = 0;
     
     cells.forEach(cell => {
-      const { row, col } = this.cellToIndices(cell);
-      if (row >= 0 && row < data.length && col >= 0 && col < data[row].length) {
-        // Handle complex cell objects
-        let value = data[row][col];
-        if (typeof value === 'object' && value !== null) {
-          value = value.value !== undefined ? value.value : 0;
+      try {
+        const { row, col } = this.cellToIndices(cell);
+        if (row >= 0 && row < data.length && col >= 0 && col < (data[row]?.length || 0)) {
+          // Handle complex cell objects
+          let value = data[row][col];
+          if (typeof value === 'object' && value !== null) {
+            value = value.value !== undefined ? value.value : 0;
+          }
+          
+          if (typeof value === 'number') {
+            sum += value;
+          } else if (typeof value === 'string' && !isNaN(Number(value))) {
+            sum += Number(value);
+          }
         }
-        
-        if (typeof value === 'number') {
-          sum += value;
-        } else if (typeof value === 'string' && !isNaN(Number(value))) {
-          sum += Number(value);
-        }
+      } catch (error) {
+        console.error("Error in calculateSum for cell:", cell, error);
       }
     });
     
@@ -424,43 +518,95 @@ export class ExcelService {
     let count = 0;
     
     cells.forEach(cell => {
-      const { row, col } = this.cellToIndices(cell);
-      if (row >= 0 && row < data.length && col >= 0 && col < data[row].length) {
-        // Handle complex cell objects
-        let value = data[row][col];
-        if (typeof value === 'object' && value !== null) {
-          value = value.value !== undefined ? value.value : 0;
+      try {
+        const { row, col } = this.cellToIndices(cell);
+        if (row >= 0 && row < data.length && col >= 0 && col < (data[row]?.length || 0)) {
+          // Handle complex cell objects
+          let value = data[row][col];
+          if (typeof value === 'object' && value !== null) {
+            value = value.value !== undefined ? value.value : 0;
+          }
+          
+          if (typeof value === 'number') {
+            sum += value;
+            count++;
+          } else if (typeof value === 'string' && !isNaN(Number(value))) {
+            sum += Number(value);
+            count++;
+          }
         }
-        
-        if (typeof value === 'number') {
-          sum += value;
-          count++;
-        } else if (typeof value === 'string' && !isNaN(Number(value))) {
-          sum += Number(value);
-          count++;
-        }
+      } catch (error) {
+        console.error("Error in calculateAverage for cell:", cell, error);
       }
     });
     
     return count > 0 ? sum / count : 0;
   }
   
-  static countCells(range: string, data: any[][]): number {
+  static calculateMax(range: string, data: any[][]): number {
     const cells = this.expandRange(range);
-    let count = 0;
+    let max = Number.NEGATIVE_INFINITY;
+    let hasValues = false;
     
     cells.forEach(cell => {
-      const { row, col } = this.cellToIndices(cell);
-      if (row >= 0 && row < data.length && col >= 0 && col < data[row].length) {
-        const value = data[row][col];
-        if (value !== null && value !== undefined && value !== '') {
-          count++;
+      try {
+        const { row, col } = this.cellToIndices(cell);
+        if (row >= 0 && row < data.length && col >= 0 && col < (data[row]?.length || 0)) {
+          // Handle complex cell objects
+          let value = data[row][col];
+          if (typeof value === 'object' && value !== null) {
+            value = value.value !== undefined ? value.value : null;
+          }
+          
+          if (typeof value === 'number') {
+            max = Math.max(max, value);
+            hasValues = true;
+          } else if (typeof value === 'string' && !isNaN(Number(value))) {
+            max = Math.max(max, Number(value));
+            hasValues = true;
+          }
         }
+      } catch (error) {
+        console.error("Error in calculateMax for cell:", cell, error);
       }
     });
     
-    return count;
+    return hasValues ? max : 0;
   }
+  
+  static calculateMin(range: string, data: any[][]): number {
+    const cells = this.expandRange(range);
+    let min = Number.POSITIVE_INFINITY;
+    let hasValues = false;
+    
+    cells.forEach(cell => {
+      try {
+        const { row, col } = this.cellToIndices(cell);
+        if (row >= 0 && row < data.length && col >= 0 && col < (data[row]?.length || 0)) {
+          // Handle complex cell objects
+          let value = data[row][col];
+          if (typeof value === 'object' && value !== null) {
+            value = value.value !== undefined ? value.value : null;
+          }
+          
+          if (typeof value === 'number') {
+            min = Math.min(min, value);
+            hasValues = true;
+          } else if (typeof value === 'string' && !isNaN(Number(value))) {
+            min = Math.min(min, Number(value));
+            hasValues = true;
+          }
+        }
+      } catch (error) {
+        console.error("Error in calculateMin for cell:", cell, error);
+      }
+    });
+    
+    return hasValues ? min : 0;
+  }
+  
+  static countCells(range: string, data: any[][]): number {
+    // ... keep existing code (countCells method)
   
   static expandRange(range: string): string[] {
     // Handle a range like "A1:C3"

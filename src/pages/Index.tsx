@@ -113,22 +113,41 @@ const Index = () => {
     
     if (excelData) {
       try {
+        // Check for chart or visualization requests
+        const isChartRequest = /chart|graph|plot|visual|pie|bar|line|radar/i.test(query.toLowerCase());
+        
         // Direct Excel operations
-        if (query.toLowerCase().includes("excel") || 
-            /create|insert|add|calculate|sum|formula|sort|filter|chart|graph/.test(query.toLowerCase())) {
+        if (isChartRequest || 
+            query.toLowerCase().includes("excel") || 
+            /create|insert|add|calculate|sum|formula|sort|filter|average|min|max/.test(query.toLowerCase())) {
           console.log("Processing Excel operation");
           const response = await GeminiService.processExcelOperation(query, excelData);
           
           if (response.excelOperation) {
             console.log("Applying Excel operation:", response.excelOperation);
-            const updatedData = ExcelService.applyOperation(excelData, response.excelOperation);
-            setExcelData(updatedData);
-            
-            toast({
-              title: "Excel Updated",
-              description: `Applied ${response.excelOperation.type} operation`,
-              duration: 3000
-            });
+            try {
+              const updatedData = ExcelService.applyOperation(excelData, response.excelOperation);
+              setExcelData(updatedData);
+              
+              toast({
+                title: "Excel Updated",
+                description: `Applied ${response.excelOperation.type} operation`,
+                duration: 3000
+              });
+            } catch (error) {
+              console.error("Error applying Excel operation:", error);
+              toast({
+                title: "Operation Error",
+                description: "Could not process the Excel operation. Please try again.",
+                variant: "destructive",
+                duration: 3000
+              });
+              
+              return {
+                text: "Sorry, I encountered an error while processing your Excel operation. Please try again with a simpler request.",
+                isError: true
+              };
+            }
           }
           
           return response;
@@ -198,11 +217,21 @@ const Index = () => {
               setShowFileUpload={setShowFileUpload}
               onCellUpdate={(sheet, row, col, value) => {
                 if (excelData) {
-                  const updatedData = ExcelService.applyOperation(excelData, {
-                    type: "update_cell",
-                    data: { row, col, value, isAIGenerated: false }
-                  });
-                  setExcelData(updatedData);
+                  try {
+                    const updatedData = ExcelService.applyOperation(excelData, {
+                      type: "update_cell",
+                      data: { row, col, value, isAIGenerated: false }
+                    });
+                    setExcelData(updatedData);
+                  } catch (error) {
+                    console.error("Error updating cell:", error);
+                    toast({
+                      title: "Cell Update Error",
+                      description: "Could not update the cell. Please try again.",
+                      variant: "destructive",
+                      duration: 3000
+                    });
+                  }
                 }
               }}
             />
