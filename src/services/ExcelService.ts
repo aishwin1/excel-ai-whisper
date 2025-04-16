@@ -1,3 +1,4 @@
+
 import * as XLSX from 'xlsx';
 
 export interface ExcelData {
@@ -606,7 +607,31 @@ export class ExcelService {
   }
   
   static countCells(range: string, data: any[][]): number {
-    // ... keep existing code (countCells method)
+    const cells = this.expandRange(range);
+    let count = 0;
+    
+    cells.forEach(cell => {
+      try {
+        const { row, col } = this.cellToIndices(cell);
+        if (row >= 0 && row < data.length && col >= 0 && col < (data[row]?.length || 0)) {
+          // Handle complex cell objects
+          let value = data[row][col];
+          if (typeof value === 'object' && value !== null) {
+            value = value.value !== undefined ? value.value : null;
+          }
+          
+          // Count non-empty cells
+          if (value !== null && value !== undefined && value !== '') {
+            count++;
+          }
+        }
+      } catch (error) {
+        console.error("Error in countCells for cell:", cell, error);
+      }
+    });
+    
+    return count;
+  }
   
   static expandRange(range: string): string[] {
     // Handle a range like "A1:C3"
