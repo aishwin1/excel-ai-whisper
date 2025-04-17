@@ -1,6 +1,6 @@
 
 import { ExcelData } from "./ExcelService";
-import { GeminiResponse, AgentState } from "./types/gemini-types";
+import { AgentState } from "./types/gemini-types";
 import { AgentStateManager } from "./agents/AgentStateManager";
 import { GeminiApiClient } from "./apis/GeminiApiClient";
 import { ExcelOperationProcessor } from "./operations/ExcelOperationProcessor";
@@ -20,7 +20,7 @@ export class GeminiService {
     AgentStateManager.resetAgentState();
   }
 
-  static async processQuery(prompt: string): Promise<GeminiResponse> {
+  static async processQuery(prompt: string): Promise<any> {
     const currentAgentState = AgentStateManager.getCurrentAgentState();
     
     if (currentAgentState.status === 'idle' || currentAgentState.originalQuery !== prompt) {
@@ -74,7 +74,7 @@ export class GeminiService {
       AgentStateManager.updateAgentStatus('executing');
       AgentStateManager.updateAgentThinking("Executing the plan step by step...");
 
-      let finalResponse: GeminiResponse = { text: "", isError: false };
+      let finalResponse: any = { text: "", isError: false };
       
       for (let i = 0; i < Math.min(steps.length, this.MAX_AGENT_ITERATIONS); i++) {
         const step = steps[i];
@@ -85,6 +85,8 @@ export class GeminiService {
           .filter(s => s.completed && s.result)
           .map((s, idx) => `Step ${idx+1} result: ${s.result}`)
           .join("\n");
+          
+        const isChartStep = /chart|graph|plot|visual|pie|bar|line|radar|histogram|scatter/i.test(step.description);
         
         const stepPrompt = `
           Excel task: "${prompt}"
@@ -106,6 +108,21 @@ export class GeminiService {
           }
           EXCEL_OPERATION_END
           
+          ${isChartStep ? `
+          IMPORTANT CHART CREATION GUIDELINES:
+          1. Select the appropriate chart type for the data:
+             - Bar charts for comparing categories
+             - Line charts for trends over time
+             - Pie charts for showing proportions of a whole
+             - Radar charts for comparing multiple variables
+          2. Give the chart a descriptive title
+          3. Provide at least 5 data points with ACTUAL values (not placeholders)
+          4. For each data point include both:
+             - "name": a descriptive label (string)
+             - "value": a numeric value (number, not string)
+          5. Make sure the data object is properly formatted as JSON
+          ` : ''}
+          
           IMPORTANT INSTRUCTIONS FOR INTELLIGENT EXCEL HANDLING:
           1. First analyze the spreadsheet structure to understand its layout and data patterns
           2. Look for existing data, headers, and already populated cells before placing new data
@@ -117,15 +134,6 @@ export class GeminiService {
           5. For charts, use the most relevant data columns and rows available
           
           Be very explicit and provide the exact data that should be used. If you need to create data, include that exact data in the operation.
-          
-          IMPORTANT: 
-          - If working with data, ALWAYS specify EXACT cell locations (row, col values)
-          - When generating data, make sure to specify enough rows/columns of data (not just one example)
-          - Ensure that columns or rows you reference exist in the spreadsheet
-          - For chart data, provide at least 5 data points with realistic values
-          - Be careful not to overwrite existing important data - check the sheet structure first
-          
-          For example, if setting up a sales table, don't just say "Set up sales data" - instead provide the EXACT cells, values, and formulas needed.
           
           After the operation JSON block, explain what you did and why.
         `;
@@ -163,6 +171,7 @@ export class GeminiService {
             case "create_chart":
               const chart = stepResponse.excelOperation.data;
               operationSummary = `Created ${chart ? chart.chartType : 'unknown'} chart: ${chart ? chart.title : ''}`;
+              console.log("Chart creation data:", JSON.stringify(chart));
               break;
               
             case "sort":
@@ -200,8 +209,7 @@ export class GeminiService {
     }
   }
 
-  static async processExcelOperation(operation: string, currentData: ExcelData): Promise<GeminiResponse> {
+  static async processExcelOperation(operation: string, currentData: ExcelData): Promise<any> {
     return ExcelOperationProcessor.processExcelOperation(operation, currentData);
   }
 }
-

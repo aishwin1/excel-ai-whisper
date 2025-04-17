@@ -48,8 +48,11 @@ const CHART_COLORS = [
 export const ExcelCharts: React.FC<ChartProps> = ({ type, data, title }) => {
   // Process data for charts if needed
   const processData = () => {
+    console.log("Processing chart data:", type, data);
+    
     // Ensure data is in the right format for recharts
     if (!data || data.length === 0) {
+      console.log("No data provided for chart, using sample data");
       // Return sample data if no data provided
       return [
         { name: "Sample A", value: 400 },
@@ -60,35 +63,69 @@ export const ExcelCharts: React.FC<ChartProps> = ({ type, data, title }) => {
     }
 
     // If data is already in the right format with name/value pairs, return as is
-    if (data[0] && (data[0].name || data[0].label)) {
-      return data;
+    if (data[0] && (data[0].name !== undefined || data[0].label !== undefined)) {
+      console.log("Data already in correct format", data);
+      return data.map(item => ({
+        name: item.name || item.label || 'Unnamed',
+        value: typeof item.value === 'number' ? item.value : 0,
+        ...item
+      }));
     }
 
     // Otherwise, try to convert tabular data to chart format
     // Assuming first row might be headers and first column might be labels
-    const headers = data[0] || [];
+    const headers = Array.isArray(data[0]) ? data[0] : [];
     const chartData = [];
 
-    for (let i = 1; i < data.length; i++) {
-      const row = data[i];
-      if (!row || row.length === 0) continue;
+    if (Array.isArray(data[0])) {
+      console.log("Converting tabular data to chart format", data);
+      for (let i = 1; i < data.length; i++) {
+        const row = data[i];
+        if (!row || row.length === 0) continue;
 
-      // Use first column as name/label if available
-      const name = row[0]?.toString() || `Item ${i}`;
-      const item: any = { name };
+        // Use first column as name/label if available
+        const name = row[0]?.toString() || `Item ${i}`;
+        const item: any = { name };
 
-      // Add other columns as values
-      for (let j = 1; j < headers.length; j++) {
-        if (headers[j]) {
-          const value = row[j];
-          // Convert to number if possible
-          item[headers[j]] = !isNaN(Number(value)) ? Number(value) : 0;
+        // Add other columns as values
+        for (let j = 1; j < headers.length; j++) {
+          if (headers[j]) {
+            const value = row[j];
+            // Convert to number if possible
+            item[headers[j]] = !isNaN(Number(value)) ? Number(value) : 0;
+          }
+        }
+        chartData.push(item);
+      }
+      return chartData;
+    }
+    
+    // Handle array of objects that don't have name/value format
+    console.log("Converting object data to chart format");
+    return data.map((item, index) => {
+      if (typeof item === 'object') {
+        const keys = Object.keys(item);
+        if (keys.length >= 2) {
+          // Try to identify name and value keys
+          const nameKey = keys.find(k => k.toLowerCase().includes('name') || 
+                                        k.toLowerCase().includes('label') ||
+                                        k.toLowerCase().includes('category')) || keys[0];
+          const valueKey = keys.find(k => k.toLowerCase().includes('value') ||
+                                         k.toLowerCase().includes('amount') ||
+                                         k.toLowerCase().includes('count')) || 
+                          keys.find(k => typeof item[k] === 'number') || keys[1];
+          
+          return {
+            name: item[nameKey]?.toString() || `Item ${index + 1}`,
+            value: !isNaN(Number(item[valueKey])) ? Number(item[valueKey]) : 0,
+            ...item
+          };
         }
       }
-      chartData.push(item);
-    }
-
-    return chartData;
+      
+      // Fallback for unrecognized formats
+      return { name: `Item ${index + 1}`, value: 0 };
+    });
   };
 
   const chartData = processData();
@@ -105,6 +142,9 @@ export const ExcelCharts: React.FC<ChartProps> = ({ type, data, title }) => {
     ? Object.keys(chartData[0]).filter(key => key !== 'name')
     : [];
 
+  console.log("Chart data keys:", dataKeys);
+  console.log("Processed chart data:", chartData);
+
   const renderChartByType = () => {
     switch (type) {
       case "bar":
@@ -116,13 +156,20 @@ export const ExcelCharts: React.FC<ChartProps> = ({ type, data, title }) => {
               <YAxis />
               <ChartTooltip content={<ChartTooltipContent />} />
               <ChartLegend content={<ChartLegendContent />} />
-              {dataKeys.map((key, index) => (
+              {dataKeys.length > 0 ? (
+                dataKeys.map((key, index) => (
+                  <Bar 
+                    key={key} 
+                    dataKey={key} 
+                    fill={CHART_COLORS[index % CHART_COLORS.length]} 
+                  />
+                ))
+              ) : (
                 <Bar 
-                  key={key} 
-                  dataKey={key} 
-                  fill={CHART_COLORS[index % CHART_COLORS.length]} 
+                  dataKey="value" 
+                  fill={CHART_COLORS[0]} 
                 />
-              ))}
+              )}
             </BarChart>
           </ChartContainer>
         );
@@ -135,15 +182,24 @@ export const ExcelCharts: React.FC<ChartProps> = ({ type, data, title }) => {
               <YAxis />
               <ChartTooltip content={<ChartTooltipContent />} />
               <ChartLegend content={<ChartLegendContent />} />
-              {dataKeys.map((key, index) => (
+              {dataKeys.length > 0 ? (
+                dataKeys.map((key, index) => (
+                  <Line 
+                    key={key} 
+                    type="monotone" 
+                    dataKey={key} 
+                    stroke={CHART_COLORS[index % CHART_COLORS.length]} 
+                    activeDot={{ r: 8 }}
+                  />
+                ))
+              ) : (
                 <Line 
-                  key={key} 
                   type="monotone" 
-                  dataKey={key} 
-                  stroke={CHART_COLORS[index % CHART_COLORS.length]} 
+                  dataKey="value" 
+                  stroke={CHART_COLORS[0]} 
                   activeDot={{ r: 8 }}
                 />
-              ))}
+              )}
             </LineChart>
           </ChartContainer>
         );
@@ -159,7 +215,7 @@ export const ExcelCharts: React.FC<ChartProps> = ({ type, data, title }) => {
                 label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
                 outerRadius={80}
                 fill="#8884d8"
-                dataKey={dataKeys[0] || "value"}
+                dataKey={dataKeys.length > 0 ? dataKeys[0] : "value"}
               >
                 {chartData.map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
@@ -177,16 +233,26 @@ export const ExcelCharts: React.FC<ChartProps> = ({ type, data, title }) => {
               <PolarGrid />
               <PolarAngleAxis dataKey="name" />
               <PolarRadiusAxis />
-              {dataKeys.map((key, index) => (
+              {dataKeys.length > 0 ? (
+                dataKeys.map((key, index) => (
+                  <Radar 
+                    key={key} 
+                    name={key} 
+                    dataKey={key} 
+                    stroke={CHART_COLORS[index % CHART_COLORS.length]} 
+                    fill={CHART_COLORS[index % CHART_COLORS.length]} 
+                    fillOpacity={0.6} 
+                  />
+                ))
+              ) : (
                 <Radar 
-                  key={key} 
-                  name={key} 
-                  dataKey={key} 
-                  stroke={CHART_COLORS[index % CHART_COLORS.length]} 
-                  fill={CHART_COLORS[index % CHART_COLORS.length]} 
+                  name="Value" 
+                  dataKey="value" 
+                  stroke={CHART_COLORS[0]} 
+                  fill={CHART_COLORS[0]} 
                   fillOpacity={0.6} 
                 />
-              ))}
+              )}
               <ChartTooltip content={<ChartTooltipContent />} />
               <ChartLegend content={<ChartLegendContent />} />
             </RadarChart>

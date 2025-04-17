@@ -30,7 +30,6 @@ export class ExcelOperationProcessor {
       // Find empty regions in the sheet
       const emptyRegions = [];
       const minEmptyRegionSize = 3; // Minimum size of an empty region to track
-      let currentEmptyRegion = { startRow: 0, startCol: 0, rowSpan: 0, colSpan: 0 };
       
       // Simple algorithm to find rectangular empty regions
       for (let row = 0; row < Math.min(30, rowCount); row++) {
@@ -87,7 +86,8 @@ export class ExcelOperationProcessor {
         emptyRegions: emptyRegions.slice(0, 3) // Limit to 3 for simplicity
       };
       
-      const isChartRequest = /chart|graph|plot|visual|pie|bar|line|radar/i.test(operation);
+      // Improved detection for chart requests
+      const isChartRequest = /chart|graph|plot|visual|pie|bar|line|radar|histogram|scatter|area/i.test(operation);
       
       let prompt;
       if (isChartRequest) {
@@ -97,7 +97,17 @@ export class ExcelOperationProcessor {
           
           I want to create a chart: ${operation}
           
-          Please generate a chart based on this data. Your response MUST include a structured operation like this:
+          IMPORTANT GUIDELINES FOR CHART CREATION:
+          1. First analyze the data to determine what would make the most meaningful visualization
+          2. Select the appropriate chart type based on the data patterns:
+             - Bar charts for comparing categories
+             - Line charts for trends over time
+             - Pie charts for showing proportions of a whole
+             - Radar charts for comparing multiple variables
+          3. Choose the most relevant columns/rows that contain numeric data
+          4. Make sure to identify proper labels for data points
+          
+          Your response MUST include a structured operation like this:
           
           EXCEL_OPERATION_START
           {
@@ -108,13 +118,18 @@ export class ExcelOperationProcessor {
               "data": [
                 {"name": "Category 1", "value": 100},
                 {"name": "Category 2", "value": 200}
-                // You must include actual data points from the spreadsheet or create appropriate sample data
+                // You must include at least 5 data points with actual values from the spreadsheet
               ]
             }
           }
           EXCEL_OPERATION_END
           
-          IMPORTANT: Be very specific about exact cell locations and ensure you're using the right data from the spreadsheet. A1 is row:0, col:0; B3 is row:2, col:1.
+          IMPORTANT: 
+          - Extract ACTUAL DATA from the sheet for visualization
+          - Ensure each data point has both a name and a numeric value
+          - Create at least 5 data points, preferably more for good visualization
+          - For multi-series data, include additional properties beyond just name/value
+          - Make sure values are numeric (not strings)
           
           After the JSON block, explain the chart and what it shows.
         `;
