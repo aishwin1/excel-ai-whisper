@@ -150,7 +150,7 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
     let processedValue: any = cellValue;
     
     // Handle formula inputs starting with =
-    if (cellValue.startsWith('=')) {
+    if (typeof cellValue === 'string' && cellValue.startsWith('=')) {
       processedValue = {
         value: cellValue,
         formula: cellValue,

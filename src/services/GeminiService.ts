@@ -22,7 +22,7 @@ export class GeminiService {
   private static API_KEY = "AIzaSyDvHZ5PRJkxXyTHfjkBUMgrpOa_iFd1HGY";
   private static API_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent";
   private static FIRECRAWL_API_KEY = "fc-eb885ba004f340d7b5f7e9ee96a6d8d1";
-  private static MAX_AGENT_ITERATIONS = 3; // Limit iterations to prevent infinite loops
+  private static MAX_AGENT_ITERATIONS = 5;
   private static currentAgentState: AgentState = {
     thinking: "",
     status: "idle",
@@ -44,7 +44,6 @@ export class GeminiService {
   }
 
   static async processQuery(prompt: string): Promise<GeminiResponse> {
-    // Reset agent state for new queries
     if (this.currentAgentState.status === 'idle' || this.currentAgentState.originalQuery !== prompt) {
       this.resetAgentState();
       this.currentAgentState.originalQuery = prompt;
@@ -56,61 +55,82 @@ export class GeminiService {
     try {
       console.log("Calling Gemini API with prompt:", prompt.substring(0, 100) + "...");
       
-      // First, get the planning response - what steps should be taken
       const planningResponse = await this.callGeminiAPI(`
         You are ExcelBot, an AI assistant specialized in working with Excel spreadsheets.
-        First, analyze this user request and break it down into a series of steps:
+        First, analyze this user request and break it down into a series of concrete steps:
         "${prompt}"
         
         Format your response like this:
         PLAN:
-        1. [First step description]
-        2. [Second step description]
+        1. [First step description - be very specific and actionable]
+        2. [Second step description - be very specific and actionable]
         ...
         
         REASONING:
         [Explain your approach]
         
-        For each step, be specific about what Excel operations will be needed (formulas, cell updates, charts, etc.)
+        For each step, be specific about what Excel operations will be needed:
+        - Cell updates (e.g., "Update cell A1 with header 'Sales'")
+        - Formulas (e.g., "Add SUM formula in B10 to total values in B1:B9")
+        - Charts (e.g., "Create bar chart showing monthly sales data")
+        - Data transformations (e.g., "Sort column B in descending order")
+        
+        Each step must be concrete and executable, not vague.
       `);
 
       if (planningResponse.isError) {
         return planningResponse;
       }
 
-      // Extract the plan from the response
       const planMatch = planningResponse.text.match(/PLAN:([\s\S]*?)(?:REASONING:|$)/);
       const plan = planMatch ? planMatch[1].trim() : "";
       
-      // Parse steps from the plan
       const steps = plan.split(/\d+\./).filter(Boolean).map(step => ({
         description: step.trim(),
-        completed: false
+        completed: false,
+        result: ""
       }));
       
       this.currentAgentState.steps = steps;
       this.currentAgentState.status = 'executing';
-      this.currentAgentState.thinking = "Executing the plan...";
+      this.currentAgentState.thinking = "Executing the plan step by step...";
 
-      // Execute each step sequentially
-      let finalResponse = { text: "", isError: false };
+      let finalResponse: GeminiResponse = { text: "", isError: false };
+      let currentSheetData = {};
       
       for (let i = 0; i < Math.min(steps.length, this.MAX_AGENT_ITERATIONS); i++) {
         const step = steps[i];
+        this.currentAgentState.thinking = `Working on step ${i+1}: ${step.description}`;
+        console.log(`Executing step ${i+1}:`, step.description);
+        
+        const previousStepsContext = steps.slice(0, i)
+          .filter(s => s.completed && s.result)
+          .map((s, idx) => `Step ${idx+1} result: ${s.result}`)
+          .join("\n");
+        
         const stepPrompt = `
           Excel task: "${prompt}"
           
-          Current step: "${step.description}"
+          Current step (${i+1}/${steps.length}): "${step.description}"
+          ${previousStepsContext ? `\nPrevious steps results:\n${previousStepsContext}` : ''}
           
-          Please implement this specific Excel operation. Your response must include structured operations in this format:
+          Please implement this specific Excel operation in detail. Your response must include structured operations in this format:
           EXCEL_OPERATION_START
           {
             "type": "update_cell | add_formula | create_chart | sort | filter",
             "data": {
-              // Operation-specific data
+              // For update_cell: { row: number, col: number, value: any }
+              // For add_formula: { row: number, col: number, formula: string with = prefix }
+              // For create_chart: { chartType: "bar|line|pie|radar", title: string, data: [{name: string, value: number}, ...] }
+              // For sort: { column: "A" or number }
+              // For filter: { column: "A" or number, value: any }
             }
           }
           EXCEL_OPERATION_END
+          
+          Be very explicit and provide the exact data that should be used. If you need to create data, include that exact data in the operation.
+          
+          For example, if setting up a sales table, don't just say "Set up sales data" - instead provide the EXACT cells, values, and formulas needed.
           
           After the operation JSON block, explain what you did and why.
         `;
@@ -124,7 +144,50 @@ export class GeminiService {
         }
         
         step.completed = true;
-        step.result = stepResponse.text.substring(0, 100) + "...";
+        
+        if (stepResponse.excelOperation && stepResponse.excelOperation.type) {
+          const operationType = stepResponse.excelOperation.type;
+          let operationSummary = "";
+          
+          switch (operationType) {
+            case "update_cell":
+              const cell = stepResponse.excelOperation.data;
+              const cellRef = cell ? `${String.fromCharCode(65 + cell.col)}${cell.row + 1}` : "unknown";
+              const cellValue = cell ? (typeof cell.value === 'object' ? JSON.stringify(cell.value).substring(0, 30) : String(cell.value).substring(0, 30)) : "unknown";
+              operationSummary = `Updated cell ${cellRef} with value: ${cellValue}${cellValue.length > 30 ? '...' : ''}`;
+              break;
+              
+            case "add_formula":
+              const formula = stepResponse.excelOperation.data;
+              const formulaRef = formula ? `${String.fromCharCode(65 + formula.col)}${formula.row + 1}` : "unknown";
+              operationSummary = `Added formula ${formula ? formula.formula : ''} to cell ${formulaRef}`;
+              break;
+              
+            case "create_chart":
+              const chart = stepResponse.excelOperation.data;
+              operationSummary = `Created ${chart ? chart.chartType : 'unknown'} chart: ${chart ? chart.title : ''}`;
+              break;
+              
+            case "sort":
+              const sort = stepResponse.excelOperation.data;
+              operationSummary = `Sorted data by column ${sort ? sort.column : 'unknown'}`;
+              break;
+              
+            case "filter":
+              const filter = stepResponse.excelOperation.data;
+              operationSummary = `Filtered data in column ${filter ? filter.column : 'unknown'} for "${filter ? filter.value : 'unknown'}"`;
+              break;
+              
+            default:
+              operationSummary = `Performed ${operationType} operation`;
+          }
+          
+          step.result = operationSummary;
+        } else {
+          step.result = stepResponse.text.substring(0, 100) + "...";
+        }
+        
+        console.log(`Step ${i+1} completed:`, step.result);
         finalResponse = stepResponse;
       }
       
@@ -163,7 +226,7 @@ export class GeminiService {
                     "data": {
                       // For update_cell: { row: number, col: number, value: any }
                       // For add_formula: { row: number, col: number, formula: string }
-                      // For create_chart: { chartType: "bar|line|pie|radar", title: string }
+                      // For create_chart: { chartType: "bar|line|pie|radar", title: string, data: [{name: string, value: number}, ...] }
                       // For sort: { column: "A" or number }
                       // For filter: { column: "A" or number, value: any }
                     }
@@ -173,12 +236,23 @@ export class GeminiService {
                   When working with charts:
                   1. Always specify the chart type: bar, line, pie, or radar
                   2. Provide a meaningful title for the chart
-                  3. Make sure to refer to actual data in the spreadsheet
+                  3. ALWAYS provide the actual data points for the chart in the 'data' array
+                  4. Example:
+                     "data": [
+                       {"name": "January", "value": 200},
+                       {"name": "February", "value": 350},
+                       {"name": "March", "value": 400}
+                     ]
                   
                   For formulas:
                   1. Always use the '=' prefix (like =SUM(A1:A10))
                   2. Make sure to provide sensible cell references
                   3. Support formulas: SUM, AVERAGE, COUNT, MAX, MIN
+                  
+                  For sample data:
+                  1. Always provide SPECIFIC data, not placeholders
+                  2. Use realistic values for the user's task
+                  3. Make sure the data makes sense in the context of the task
                   
                   Answer the following query about Excel: ${prompt}`
                 }
@@ -215,11 +289,9 @@ export class GeminiService {
 
       console.log("Gemini API response received:", data);
       
-      // Extract the response text
       const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated";
       
-      // Check if the response contains Excel operations
-      const excelOperation = this.extractExcelOperation(responseText, prompt);
+      const excelOperation = this.extractExcelOperation(responseText);
       
       return { 
         text: responseText, 
@@ -235,9 +307,7 @@ export class GeminiService {
     }
   }
 
-  // Function to analyze and process Excel operations
   static async processExcelOperation(operation: string, currentData: any): Promise<GeminiResponse> {
-    // Update agent state
     this.currentAgentState.thinking = `Processing operation: ${operation}`;
     
     try {
@@ -245,7 +315,14 @@ export class GeminiService {
       const sheetData = currentData.sheets[activeSheetName].data;
       const sampleData = sheetData.slice(0, Math.min(5, sheetData.length));
       
-      // Check for chart-related requests
+      const sheetContext = {
+        activeSheet: activeSheetName,
+        rowCount: sheetData.length,
+        columnCount: Math.max(...sheetData.map((row: any[]) => row.length)),
+        headerRow: sheetData[0],
+        sampleData: sampleData
+      };
+      
       const isChartRequest = /chart|graph|plot|visual|pie|bar|line|radar/i.test(operation);
       
       let prompt;
@@ -267,7 +344,7 @@ export class GeminiService {
               "data": [
                 {"name": "Category 1", "value": 100},
                 {"name": "Category 2", "value": 200}
-                // You can infer categories and values from the data
+                // You must include actual data points from the spreadsheet or create appropriate sample data
               ]
             }
           }
@@ -278,6 +355,9 @@ export class GeminiService {
       } else {
         prompt = `
           I have an Excel spreadsheet with the following data structure:
+          ${JSON.stringify(sheetContext)}
+          
+          Sample data from the active sheet:
           ${JSON.stringify(sampleData)}
           
           I want to: ${operation}
@@ -297,13 +377,14 @@ export class GeminiService {
           }
           EXCEL_OPERATION_END
           
+          Be very specific about exact cell locations, values, and formulas.
+          If creating data, provide the complete data set, not just placeholders.
           After the JSON block, explain the operation in natural language.
         `;
       }
       
       const response = await this.callGeminiAPI(prompt);
       
-      // Add the operation to our steps
       if (this.currentAgentState.status === 'executing') {
         const lastIncompleteStep = this.currentAgentState.steps.find(step => !step.completed);
         if (lastIncompleteStep) {
@@ -321,20 +402,16 @@ export class GeminiService {
       };
     }
   }
-  
-  // Helper function to extract Excel operations from Gemini response
-  private static extractExcelOperation(text: string, originalQuery: string): { type: string, data?: any } | undefined {
+
+  private static extractExcelOperation(text: string): { type: string, data?: any } | undefined {
     try {
-      // Extract operation from the structured format
       if (text.includes("EXCEL_OPERATION_START") && text.includes("EXCEL_OPERATION_END")) {
         const operationMatch = text.match(/EXCEL_OPERATION_START\s*([\s\S]*?)\s*EXCEL_OPERATION_END/);
         if (operationMatch && operationMatch[1]) {
           try {
-            // Clean up the JSON content by removing markdown code block syntax if present
             let jsonContent = operationMatch[1].trim();
             jsonContent = jsonContent.replace(/```json\s*/g, '').replace(/```\s*$/g, '');
             
-            // Remove any line numbers or extra characters that might break JSON parsing
             jsonContent = jsonContent.replace(/^\s*\d+[\s:]*/gm, '');
             
             console.log("Attempting to parse Excel operation:", jsonContent);
@@ -346,7 +423,6 @@ export class GeminiService {
             } catch (jsonErr) {
               console.error("First JSON parse error:", jsonErr);
               
-              // Try to recover by fixing common JSON syntax issues
               const fixedJson = this.fixCommonJsonErrors(jsonContent);
               console.log("Attempting to parse with fixed JSON:", fixedJson);
               
@@ -356,7 +432,7 @@ export class GeminiService {
                 return operationData;
               } catch (fixedJsonErr) {
                 console.error("Fixed JSON parse error:", fixedJsonErr);
-                // Fall back to detection logic
+                return undefined;
               }
             }
           } catch (err) {
@@ -366,243 +442,251 @@ export class GeminiService {
         }
       }
       
-      // If no structured operation found, try to detect operations from the text
-      return this.detectExcelOperation(text, originalQuery);
+      return this.detectExcelOperation(text);
     } catch (error) {
       console.error("Error extracting Excel operation:", error);
       return undefined;
     }
   }
-  
-  // Helper to fix common JSON syntax errors
+
   private static fixCommonJsonErrors(jsonText: string): string {
     let fixed = jsonText;
     
-    // Fix missing quotes around property names
     fixed = fixed.replace(/(\s*)(\w+)(\s*):/g, '$1"$2"$3:');
-    
-    // Fix single quotes to double quotes
     fixed = fixed.replace(/'/g, '"');
-    
-    // Fix trailing commas in arrays and objects
     fixed = fixed.replace(/,(\s*[\]}])/g, '$1');
-    
-    // Add missing quotes around string values
-    // This is complex and might not catch all cases
     
     return fixed;
   }
-  
-  // Helper function to detect if the response contains an Excel operation
-  private static detectExcelOperation(text: string, originalQuery: string): { type: string, data?: any } | undefined {
+
+  private static detectExcelOperation(text: string): { type: string, data?: any } | undefined {
     console.log("Detecting Excel operation from text");
     
-    try {
-      // Detect chart creation requests
-      const chartOperation = /chart|graph|plot|visual|pie|bar|line|radar/i;
-      if (chartOperation.test(originalQuery) || chartOperation.test(text)) {
-        let chartType = "bar"; // Default
-        
-        // Determine chart type from text
-        if (/pie\s*chart/i.test(text) || /pie\s*chart/i.test(originalQuery)) {
-          chartType = "pie";
-        } else if (/line\s*chart|trend/i.test(text) || /line\s*chart|trend/i.test(originalQuery)) {
-          chartType = "line";
-        } else if (/radar|spider/i.test(text) || /radar|spider/i.test(originalQuery)) {
-          chartType = "radar";
+    const chartMatch = text.match(/create\s+(a|an)\s+(bar|line|pie|radar)\s+chart/i);
+    if (chartMatch) {
+      const chartType = chartMatch[2].toLowerCase();
+      
+      let title = "Chart";
+      const titleMatch = text.match(/title[:|=]["']?([^"'\n]+)["']?/i);
+      if (titleMatch && titleMatch[1]) {
+        title = titleMatch[1].trim();
+      }
+      
+      const dataPoints = this.extractChartDataPoints(text);
+      
+      return {
+        type: "create_chart",
+        data: {
+          chartType,
+          title,
+          data: dataPoints.length > 0 ? dataPoints : [
+            {name: "Sample 1", value: 30},
+            {name: "Sample 2", value: 50},
+            {name: "Sample 3", value: 70}
+          ]
         }
-        
-        // Extract title if available
-        let title = "Chart";
-        const titleMatch = text.match(/title[:|=]["']?([^"'\n]+)["']?/i);
-        if (titleMatch && titleMatch[1]) {
-          title = titleMatch[1].trim();
-        } else {
-          // Generate title from query
-          title = `${chartType.charAt(0).toUpperCase() + chartType.slice(1)} Chart: ${originalQuery.substring(0, 30)}`;
-        }
-        
-        return {
-          type: "create_chart",
-          data: {
-            chartType,
-            title,
-            data: [] // Empty data will be populated with samples by ExcelService
-          }
-        };
-      }
-      
-      // Check for formula-like patterns
-      const formulaMatch = text.match(/=\s*([A-Z]+\s*\([^)]*\))/i);
-      if (formulaMatch) {
-        return {
-          type: "add_formula",
-          data: {
-            formula: formulaMatch[0],
-            row: 1,
-            col: 1
-          }
-        };
-      }
-      
-      // Check for common Excel operations keywords
-      const sumOperation = /sum|total|add up|calculate total/i;
-      const averageOperation = /average|mean|avg/i;
-      const maxOperation = /maximum|max value|highest/i;
-      const minOperation = /minimum|min value|lowest/i;
-      
-      if (sumOperation.test(originalQuery) || sumOperation.test(text)) {
-        // Extract range if available
-        const rangeMatch = text.match(/([A-Z]+\d+\s*:\s*[A-Z]+\d+)/i);
-        const formula = rangeMatch ? `=SUM(${rangeMatch[1]})` : "=SUM(A1:A10)";
-        
-        return {
-          type: "add_formula",
-          data: {
-            formula,
-            row: 10,
-            col: 1
-          }
-        };
-      }
-      
-      if (averageOperation.test(originalQuery) || averageOperation.test(text)) {
-        // Extract range if available
-        const rangeMatch = text.match(/([A-Z]+\d+\s*:\s*[A-Z]+\d+)/i);
-        const formula = rangeMatch ? `=AVERAGE(${rangeMatch[1]})` : "=AVERAGE(A1:A10)";
-        
-        return {
-          type: "add_formula",
-          data: {
-            formula,
-            row: 10,
-            col: 1
-          }
-        };
-      }
-      
-      if (maxOperation.test(originalQuery) || maxOperation.test(text)) {
-        // Extract range if available
-        const rangeMatch = text.match(/([A-Z]+\d+\s*:\s*[A-Z]+\d+)/i);
-        const formula = rangeMatch ? `=MAX(${rangeMatch[1]})` : "=MAX(A1:A10)";
-        
-        return {
-          type: "add_formula",
-          data: {
-            formula,
-            row: 10,
-            col: 1
-          }
-        };
-      }
-      
-      if (minOperation.test(originalQuery) || minOperation.test(text)) {
-        // Extract range if available
-        const rangeMatch = text.match(/([A-Z]+\d+\s*:\s*[A-Z]+\d+)/i);
-        const formula = rangeMatch ? `=MIN(${rangeMatch[1]})` : "=MIN(A1:A10)";
-        
-        return {
-          type: "add_formula",
-          data: {
-            formula,
-            row: 10,
-            col: 1
-          }
-        };
-      }
-      
-      // Check for cell references like A1, B2, etc.
-      const cellReferenceMatch = text.match(/([A-Z]+\d+)\s*=\s*(.+)/i);
-      if (cellReferenceMatch) {
-        const cellRef = cellReferenceMatch[1];
-        const value = cellReferenceMatch[2].trim();
-        
-        // Extract row and column from cell reference
-        const colStr = cellRef.match(/[A-Z]+/)?.[0] || 'A';
-        const rowStr = cellRef.match(/\d+/)?.[0] || '1';
-        
-        const col = this.columnToIndex(colStr);
-        const row = parseInt(rowStr) - 1;
-        
-        return {
-          type: "update_cell",
-          data: {
-            row,
-            col,
-            value: value.startsWith('=') ? value : isNaN(Number(value)) ? value : Number(value)
-          }
-        };
-      }
-      
-      // Detect sorting operations
-      if (/sort|order|arrange/i.test(originalQuery) || /sort|order|arrange/i.test(text)) {
-        const column = this.extractColumnFromText(text) || "A";
-        return {
-          type: "sort",
-          data: {
-            column
-          }
-        };
-      }
-      
-      // Detect filter operations
-      if (/filter|find|show only/i.test(originalQuery) || /filter|find|show only/i.test(text)) {
-        const column = this.extractColumnFromText(text) || "A";
-        const valueMatch = text.match(/filter\s+by\s+["']?([^"'\n]+)["']?/i);
-        const value = valueMatch ? valueMatch[1] : originalQuery.substring(0, 50);
-        
-        return {
-          type: "filter",
-          data: {
-            column,
-            value
-          }
-        };
-      }
-      
-      // Common "add this value" requests
-      if (/add|insert|enter|put|set|place|create/i.test(originalQuery)) {
-        // Most generic operation - add something at cell A1
-        return {
-          type: "update_cell",
-          data: {
-            row: 0,
-            col: 0,
-            value: originalQuery.substring(0, 100) // Use part of the query as the value
-          }
-        };
-      }
-    } catch (error) {
-      console.error("Error in detectExcelOperation:", error);
+      };
     }
     
-    // Couldn't detect any specific operation
+    const formulaMatch = text.match(/=\s*([A-Z]+\s*\([^)]*\))/i);
+    if (formulaMatch) {
+      const cellRefMatch = text.match(/(?:in|to)\s+cell\s+([A-Z]+\d+)/i);
+      let row = 0, col = 0;
+      
+      if (cellRefMatch && cellRefMatch[1]) {
+        const cellRef = cellRefMatch[1];
+        col = cellRef.charCodeAt(0) - 65;
+        row = parseInt(cellRef.substring(1)) - 1;
+      }
+      
+      return {
+        type: "add_formula",
+        data: {
+          formula: formulaMatch[0].trim(),
+          row,
+          col
+        }
+      };
+    }
+    
+    const cellUpdateMatch = text.match(/(?:set|put|update)\s+(?:cell\s+)?([A-Z]+\d+)\s+(?:to|with|as|=)\s+["']?([^"'\n]+)["']?/i);
+    if (cellUpdateMatch) {
+      const cellRef = cellUpdateMatch[1];
+      const value = cellUpdateMatch[2].trim();
+      
+      const col = cellRef.charCodeAt(0) - 65;
+      const row = parseInt(cellRef.substring(1)) - 1;
+      
+      return {
+        type: "update_cell",
+        data: {
+          row,
+          col,
+          value: !isNaN(Number(value)) ? Number(value) : value
+        }
+      };
+    }
+    
+    const sortMatch = text.match(/sort\s+(?:by\s+)?(?:column\s+)?([A-Z]|[0-9]+)/i);
+    if (sortMatch) {
+      const column = sortMatch[1];
+      return {
+        type: "sort",
+        data: {
+          column
+        }
+      };
+    }
+    
+    const filterMatch = text.match(/filter\s+(?:by|where)\s+(?:column\s+)?([A-Z]|[0-9]+)\s+(?:is|=|contains)\s+["']?([^"'\n]+)["']?/i);
+    if (filterMatch) {
+      const column = filterMatch[1];
+      const value = filterMatch[2].trim();
+      
+      return {
+        type: "filter",
+        data: {
+          column,
+          value
+        }
+      };
+    }
+    
+    const dataInsertionMatch = text.match(/insert|create|add|populate|fill|enter\s+data/i);
+    if (dataInsertionMatch) {
+      const tableData = this.extractTableData(text);
+      if (tableData.length > 0) {
+        const firstRow = tableData[0];
+        if (firstRow && firstRow.length > 0) {
+          return {
+            type: "update_cell",
+            data: {
+              row: 0,
+              col: 0,
+              value: firstRow[0]
+            }
+          };
+        }
+      }
+    }
+    
     return undefined;
   }
-  
-  // Helper to suggest a cell for result placement
+
+  private static extractChartDataPoints(text: string): Array<{name: string, value: number}> {
+    const dataPoints: Array<{name: string, value: number}> = [];
+    
+    const dataArrayMatch = text.match(/data\s*:\s*\[\s*([\s\S]*?)\s*\]/i);
+    if (dataArrayMatch && dataArrayMatch[1]) {
+      const dataContent = dataArrayMatch[1];
+      
+      const itemMatches = dataContent.matchAll(/{\s*["']?name["']?\s*:\s*["']?([^"',]+)["']?\s*,\s*["']?value["']?\s*:\s*(\d+)/g);
+      if (itemMatches) {
+        for (const match of itemMatches) {
+          const name = match[1].trim();
+          const value = parseInt(match[2]);
+          if (name && !isNaN(value)) {
+            dataPoints.push({ name, value });
+          }
+        }
+      }
+    }
+    
+    if (dataPoints.length === 0) {
+      const lines = text.split('\n');
+      for (const line of lines) {
+        const dataMatch = line.match(/([A-Za-z0-9\s]+)(?:\s*[-:|]\s*)(\d+)/);
+        if (dataMatch) {
+          const name = dataMatch[1].trim();
+          const value = parseInt(dataMatch[2]);
+          if (name && !isNaN(value)) {
+            dataPoints.push({ name, value });
+          }
+        }
+      }
+    }
+    
+    return dataPoints;
+  }
+
+  private static extractTableData(text: string): string[][] {
+    const tableData: string[][] = [];
+    
+    let inTable = false;
+    let headerPassed = false;
+    
+    for (const line of text.split('\n')) {
+      const trimmedLine = line.trim();
+      
+      if (trimmedLine.match(/^\|?\s*[-:]+\s*\|/)) {
+        inTable = true;
+        headerPassed = true;
+        continue;
+      }
+      
+      if (inTable && trimmedLine.startsWith('|')) {
+        const cells = trimmedLine
+          .split('|')
+          .slice(1, -1)
+          .map(cell => cell.trim());
+        
+        if (cells.length > 0) {
+          tableData.push(cells);
+        }
+      } else if (inTable && !trimmedLine) {
+        inTable = false;
+      }
+    }
+    
+    if (tableData.length === 0) {
+      let consecutiveDataRows = 0;
+      
+      for (const line of text.split('\n')) {
+        const trimmedLine = line.trim();
+        if (!trimmedLine) {
+          consecutiveDataRows = 0;
+          continue;
+        }
+        
+        if (trimmedLine.includes(',') || trimmedLine.includes('\t')) {
+          const separator = trimmedLine.includes(',') ? ',' : '\t';
+          const cells = trimmedLine.split(separator).map(cell => cell.trim());
+          
+          if (cells.length > 1) {
+            tableData.push(cells);
+            consecutiveDataRows++;
+            
+            if (consecutiveDataRows >= 2) {
+              break;
+            }
+          } else {
+            consecutiveDataRows = 0;
+          }
+        }
+      }
+    }
+    
+    return tableData;
+  }
+
   private static suggestCellForResult(text: string): { row: number, col: number } {
-    // Look for "in cell X" patterns
     const cellMatch = text.match(/in\s+cell\s+([A-Z]+\d+)/i);
     if (cellMatch && cellMatch[1]) {
       return this.cellToIndices(cellMatch[1]);
     }
     
-    // Default to a reasonable location
     return {
       row: 10,
       col: 1
     };
   }
-  
-  // Helper to extract column letter from text
+
   private static extractColumnFromText(text: string): string | null {
     const columnMatch = text.match(/column\s+([A-Z])/i);
     if (columnMatch && columnMatch[1]) {
       return columnMatch[1];
     }
     
-    // Also look for cell references and extract column
     const cellMatch = text.match(/cell\s+([A-Z]+)\d+/i);
     if (cellMatch && cellMatch[1]) {
       return cellMatch[1];
@@ -610,22 +694,18 @@ export class GeminiService {
     
     return null;
   }
-  
-  // Helper to extract formula from text
+
   private static extractFormulaFromText(text: string): string | null {
-    // Look for formula syntax in text
     const formulaMatch = text.match(/=\s*([A-Z]+\s*\([^)]*\))/i);
     if (formulaMatch) {
       return formulaMatch[0];
     }
     
-    // Look for formula statements like "Use SUM(A1:A10)"
     const functionMatch = text.match(/(SUM|AVERAGE|COUNT|MAX|MIN|IF|VLOOKUP)\s*\(([^)]+)\)/i);
     if (functionMatch) {
       return `=${functionMatch[1]}(${functionMatch[2]})`;
     }
     
-    // Look for common formula keywords
     if (text.match(/sum|total/i)) {
       const rangeMatch = text.match(/([A-Z]+\d+\s*:\s*[A-Z]+\d+)/i);
       if (rangeMatch) {
@@ -642,8 +722,7 @@ export class GeminiService {
     
     return null;
   }
-  
-  // Helper to convert cell reference to indices
+
   private static cellToIndices(cell: string): { row: number, col: number } {
     const colStr = cell.match(/[A-Z]+/)?.[0] || 'A';
     const rowStr = cell.match(/\d+/)?.[0] || '1';
@@ -653,20 +732,18 @@ export class GeminiService {
       col: this.columnToIndex(colStr)
     };
   }
-  
-  // Helper to convert column letter to index
+
   private static columnToIndex(col: string): number {
     let index = 0;
     for (let i = 0; i < col.length; i++) {
       index = index * 26 + col.charCodeAt(i) - 64;
     }
-    return index - 1; // Convert to 0-based
+    return index - 1;
   }
-  
-  // Helper to convert index to column letter
+
   private static indexToColumn(index: number): string {
     let column = '';
-    index += 1; // Convert to 1-based
+    index += 1;
     
     while (index > 0) {
       const remainder = (index - 1) % 26;
