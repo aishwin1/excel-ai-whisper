@@ -5,7 +5,8 @@ import { AgentStateManager } from "./agents/AgentStateManager";
 import { GeminiApiClient } from "./apis/GeminiApiClient";
 import { ExcelOperationProcessor } from "./operations/ExcelOperationProcessor";
 
-export { GeminiResponse, AgentState } from "./types/gemini-types";
+// Fix the export syntax for TypeScript with isolatedModules enabled
+export type { GeminiResponse, AgentState } from "./types/gemini-types";
 
 export class GeminiService {
   private static FIRECRAWL_API_KEY = "fc-eb885ba004f340d7b5f7e9ee96a6d8d1";
@@ -105,6 +106,16 @@ export class GeminiService {
           }
           EXCEL_OPERATION_END
           
+          IMPORTANT INSTRUCTIONS FOR INTELLIGENT EXCEL HANDLING:
+          1. First analyze the spreadsheet structure to understand its layout and data patterns
+          2. Look for existing data, headers, and already populated cells before placing new data
+          3. For calculations or results, identify the most appropriate cell location:
+             - If updating existing tables, find the last row with data and append below it
+             - For totals/summaries, place them at the bottom of their associated column
+             - For new data, find an empty area to avoid overwriting existing content
+          4. When adding formulas, ensure they reference the correct cell ranges based on actual data
+          5. For charts, use the most relevant data columns and rows available
+          
           Be very explicit and provide the exact data that should be used. If you need to create data, include that exact data in the operation.
           
           IMPORTANT: 
@@ -193,3 +204,4 @@ export class GeminiService {
     return ExcelOperationProcessor.processExcelOperation(operation, currentData);
   }
 }
+
