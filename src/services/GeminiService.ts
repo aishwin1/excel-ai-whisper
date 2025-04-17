@@ -1,3 +1,6 @@
+
+import { ExcelData } from "./ExcelService";
+
 export interface GeminiResponse {
   text: string;
   isError: boolean;
@@ -96,7 +99,6 @@ export class GeminiService {
       this.currentAgentState.thinking = "Executing the plan step by step...";
 
       let finalResponse: GeminiResponse = { text: "", isError: false };
-      let currentSheetData = {};
       
       for (let i = 0; i < Math.min(steps.length, this.MAX_AGENT_ITERATIONS); i++) {
         const step = steps[i];
@@ -129,6 +131,13 @@ export class GeminiService {
           EXCEL_OPERATION_END
           
           Be very explicit and provide the exact data that should be used. If you need to create data, include that exact data in the operation.
+          
+          IMPORTANT: 
+          - If working with data, ALWAYS specify EXACT cell locations (row, col values)
+          - When generating data, make sure to specify enough rows/columns of data (not just one example)
+          - Ensure that columns or rows you reference exist in the spreadsheet
+          - For chart data, provide at least 5 data points with realistic values
+          - Be careful not to overwrite existing important data - check the sheet structure first
           
           For example, if setting up a sales table, don't just say "Set up sales data" - instead provide the EXACT cells, values, and formulas needed.
           
@@ -233,27 +242,36 @@ export class GeminiService {
                   }
                   EXCEL_OPERATION_END
                   
-                  When working with charts:
-                  1. Always specify the chart type: bar, line, pie, or radar
-                  2. Provide a meaningful title for the chart
-                  3. ALWAYS provide the actual data points for the chart in the 'data' array
-                  4. Example:
-                     "data": [
-                       {"name": "January", "value": 200},
-                       {"name": "February", "value": 350},
-                       {"name": "March", "value": 400}
-                     ]
+                  IMPORTANT GUIDELINES FOR EXCEL OPERATIONS:
+                  1. When updating cells or adding data:
+                     - ALWAYS use 0-based row/column indices (first row is 0, first column is 0)
+                     - Make sure to specify exact row/column numbers for ALL data
+                     - Avoid using relative references or placeholders
+                     - Provide complete data sets with clear organization
+                     - A1 = row:0, col:0; B3 = row:2, col:1
                   
-                  For formulas:
-                  1. Always use the '=' prefix (like =SUM(A1:A10))
-                  2. Make sure to provide sensible cell references
-                  3. Support formulas: SUM, AVERAGE, COUNT, MAX, MIN
+                  2. When working with charts:
+                     - Always specify the chart type: bar, line, pie, or radar
+                     - Provide a meaningful title for the chart
+                     - ALWAYS provide the actual data points for the chart in the 'data' array
+                     - Include at least 5 data points with realistic values
+                     - Example:
+                       "data": [
+                         {"name": "January", "value": 200},
+                         {"name": "February", "value": 350},
+                         {"name": "March", "value": 400}
+                       ]
                   
-                  For sample data:
-                  1. Always provide SPECIFIC data, not placeholders
-                  2. Use realistic values for the user's task
-                  3. Make sure the data makes sense in the context of the task
+                  3. For formulas:
+                     - Always use the '=' prefix (like =SUM(A1:A10))
+                     - Make sure to provide sensible cell references
+                     - Support formulas: SUM, AVERAGE, COUNT, MAX, MIN
                   
+                  4. For sample data:
+                     - Always provide SPECIFIC data, not placeholders
+                     - Use realistic values for the user's task
+                     - Make sure the data makes sense in the context of the task
+
                   Answer the following query about Excel: ${prompt}`
                 }
               ]
@@ -350,7 +368,38 @@ export class GeminiService {
           }
           EXCEL_OPERATION_END
           
+          IMPORTANT: Be very specific about exact cell locations and ensure you're using the right data from the spreadsheet. A1 is row:0, col:0; B3 is row:2, col:1.
+          
           After the JSON block, explain the chart and what it shows.
+        `;
+      } else if (operation.toLowerCase().includes("create") || operation.toLowerCase().includes("generate data") || operation.toLowerCase().includes("sample data")) {
+        prompt = `
+          I have an Excel spreadsheet with the following data structure:
+          ${JSON.stringify(sheetContext)}
+          
+          I want to: ${operation}
+          
+          Please generate appropriate data for this task. Your response MUST include a series of structured operations in this format:
+          
+          EXCEL_OPERATION_START
+          {
+            "type": "update_cell",
+            "data": {
+              "row": 0, // EXACT row number (0-based)
+              "col": 0, // EXACT column number (0-based)
+              "value": "Header text or cell value"
+            }
+          }
+          EXCEL_OPERATION_END
+          
+          IMPORTANT: 
+          - Provide MULTIPLE update_cell operations, one for EACH cell that needs data
+          - Use exact 0-based row/column indices (A1 = row:0, col:0; B3 = row:2, col:1)
+          - Start data at row 0 or row 1 (if there's a header row)
+          - Generate at least 5-10 rows of realistic data
+          - Avoid overwriting any important existing data
+          
+          After the JSON block, explain the data you've created.
         `;
       } else {
         prompt = `
@@ -378,6 +427,7 @@ export class GeminiService {
           EXCEL_OPERATION_END
           
           Be very specific about exact cell locations, values, and formulas.
+          Remember to use 0-based indices for rows and columns (A1 = row:0, col:0; B3 = row:2, col:1).
           If creating data, provide the complete data set, not just placeholders.
           After the JSON block, explain the operation in natural language.
         `;
@@ -442,11 +492,44 @@ export class GeminiService {
         }
       }
       
+      // Check for multiple operations
+      const multipleOperations = this.extractMultipleOperations(text);
+      if (multipleOperations.length > 0) {
+        console.log("Found multiple Excel operations:", multipleOperations.length);
+        // Just return the first operation for now
+        // In the future, we could process all operations
+        return multipleOperations[0];
+      }
+      
       return this.detectExcelOperation(text);
     } catch (error) {
       console.error("Error extracting Excel operation:", error);
       return undefined;
     }
+  }
+  
+  // New method to extract multiple operations
+  private static extractMultipleOperations(text: string): Array<{ type: string, data?: any }> {
+    const operations: Array<{ type: string, data?: any }> = [];
+    
+    // Look for patterns like "update_cell" followed by JSON structure
+    const updateCellMatches = text.matchAll(/\{\s*"type"\s*:\s*"update_cell"\s*,\s*"data"\s*:\s*\{\s*"row"\s*:\s*(\d+)\s*,\s*"col"\s*:\s*(\d+)\s*,\s*"value"\s*:\s*("[^"]*"|\d+|true|false|null)\s*\}\s*\}/g);
+    
+    if (updateCellMatches) {
+      for (const match of updateCellMatches) {
+        try {
+          const fullMatch = match[0];
+          const parsedOp = JSON.parse(fullMatch);
+          if (parsedOp.type && parsedOp.data) {
+            operations.push(parsedOp);
+          }
+        } catch (e) {
+          console.error("Error parsing operation in multiple operations extraction:", e);
+        }
+      }
+    }
+    
+    return operations;
   }
 
   private static fixCommonJsonErrors(jsonText: string): string {
@@ -461,6 +544,12 @@ export class GeminiService {
 
   private static detectExcelOperation(text: string): { type: string, data?: any } | undefined {
     console.log("Detecting Excel operation from text");
+    
+    // First look for data creation patterns with multiple values
+    const dataCreationPattern = this.extractDataCreationPattern(text);
+    if (dataCreationPattern) {
+      return dataCreationPattern;
+    }
     
     const chartMatch = text.match(/create\s+(a|an)\s+(bar|line|pie|radar)\s+chart/i);
     if (chartMatch) {
@@ -482,7 +571,9 @@ export class GeminiService {
           data: dataPoints.length > 0 ? dataPoints : [
             {name: "Sample 1", value: 30},
             {name: "Sample 2", value: 50},
-            {name: "Sample 3", value: 70}
+            {name: "Sample 3", value: 70},
+            {name: "Sample 4", value: 90},
+            {name: "Sample 5", value: 40}
           ]
         }
       };
@@ -556,18 +647,65 @@ export class GeminiService {
     if (dataInsertionMatch) {
       const tableData = this.extractTableData(text);
       if (tableData.length > 0) {
-        const firstRow = tableData[0];
-        if (firstRow && firstRow.length > 0) {
-          return {
-            type: "update_cell",
-            data: {
-              row: 0,
-              col: 0,
-              value: firstRow[0]
-            }
-          };
-        }
+        // Create multiple update_cell operations for the table data
+        return {
+          type: "update_cell",
+          data: {
+            row: 0,
+            col: 0,
+            value: tableData[0][0] || "Data"
+          }
+        };
       }
+    }
+    
+    return undefined;
+  }
+  
+  // New helper method to extract data creation patterns
+  private static extractDataCreationPattern(text: string): { type: string, data?: any } | undefined {
+    // Look for tables in markdown format
+    const tableRows = text.split('\n').filter(line => line.trim().startsWith('|'));
+    if (tableRows.length > 2) {
+      const headerRow = tableRows[0].split('|').filter(Boolean).map(cell => cell.trim());
+      
+      // Return an update for the first cell as a preview
+      if (headerRow.length > 0) {
+        return {
+          type: "update_cell",
+          data: {
+            row: 0,
+            col: 0,
+            value: headerRow[0]
+          }
+        };
+      }
+    }
+    
+    // Look for mentions of specific cell references with values
+    const cellValuePairs = [];
+    const cellValueRegex = /([A-Z]+\d+)\s*[:=]\s*["']?([^"',\n]+)["']?/g;
+    let match;
+    while ((match = cellValueRegex.exec(text)) !== null) {
+      const cellRef = match[1];
+      const value = match[2].trim();
+      
+      const col = cellRef.charCodeAt(0) - 65;
+      const row = parseInt(cellRef.substring(1)) - 1;
+      
+      cellValuePairs.push({
+        row,
+        col,
+        value: !isNaN(Number(value)) ? Number(value) : value
+      });
+    }
+    
+    if (cellValuePairs.length > 0) {
+      // Return the first cell-value pair
+      return {
+        type: "update_cell",
+        data: cellValuePairs[0]
+      };
     }
     
     return undefined;

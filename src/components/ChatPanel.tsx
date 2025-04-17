@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -180,6 +179,40 @@ export const ChatPanel = ({
               description: `Applied ${response.excelOperation.type} operation successfully`,
               duration: 3000,
             });
+            
+            // Process multiple operations if they exist in the text
+            if (response.text && response.text.includes('"type": "update_cell"')) {
+              // Extract and apply additional operations from the text
+              const matches = response.text.matchAll(/\{\s*"type"\s*:\s*"update_cell"\s*,\s*"data"\s*:\s*\{\s*"row"\s*:\s*(\d+)\s*,\s*"col"\s*:\s*(\d+)\s*,\s*"value"\s*:\s*("[^"]*"|\d+|true|false|null)\s*\}\s*\}/g);
+              
+              let operationsApplied = 0;
+              for (const match of matches) {
+                try {
+                  const fullMatch = match[0];
+                  const parsedOp = JSON.parse(fullMatch);
+                  
+                  if (parsedOp.type === "update_cell" && 
+                      parsedOp.data && 
+                      typeof parsedOp.data.row === 'number' && 
+                      typeof parsedOp.data.col === 'number') {
+                    
+                    const newData = ExcelService.applyOperation(updatedData, parsedOp);
+                    onUpdateExcelData(newData);
+                    operationsApplied++;
+                  }
+                } catch (e) {
+                  console.error("Error processing additional operation:", e);
+                }
+              }
+              
+              if (operationsApplied > 0) {
+                toast({
+                  title: "Multiple Updates",
+                  description: `Applied ${operationsApplied} additional cell updates`,
+                  duration: 3000,
+                });
+              }
+            }
           } catch (error) {
             console.error("Error applying Excel operation:", error);
             toast({

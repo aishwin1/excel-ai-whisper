@@ -332,7 +332,7 @@ export const ExcelPreview = ({ excelData, setShowFileUpload, onCellUpdate }: Exc
                                   const cellValue = sheet?.data?.[rowIndex]?.[colIndex] || "";
                                   
                                   // Extract display value and attributes
-                                  let cellDisplay: string;
+                                  let cellDisplay = "";
                                   let isAIGenerated = false;
                                   let isFormulaCell = false;
                                   let isChartCell = false;
